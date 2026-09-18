@@ -1,6 +1,6 @@
 # RH-0001 — Imported Source Baseline Reconciliation
 
-**STATUS:** REVIEW (2026-09-18, branch `rh-0001-imported-source-baseline-reconciliation`)  
+**STATUS:** COMPLETE — accepted and squash-merged via PR #1 at `605ee8f` on 2026-09-18  
 **AUTOMATION_ELIGIBLE:** true  
 **PRIORITY:** 1
 
@@ -26,6 +26,6 @@ Once the existing Synology ReelHouse source is present in this checkout, establi
 - Follow-on RH-0002–RH-0007 can be safely activated.
 - No deploy/restart/release.
 
-## Stop condition
+## Integration
 
-If the application source is not actually present in the checkout, stop BLOCKED and report that the Synology source import is still required. Do not invent an application scaffold.
+Accepted by the controller and squash-merged through PR #1. The source-import gate is cleared.
