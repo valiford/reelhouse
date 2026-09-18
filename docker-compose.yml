@@ -29,3 +29,5 @@ services:
       JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:-}
       JELLYFIN_USER_ID: ${JELLYFIN_USER_ID:-}
       NEXT_PUBLIC_JELLYFIN_URL: ${NEXT_PUBLIC_JELLYFIN_URL:-http://localhost:8096}
+      # Server-side only; blank keeps the UI in demo mode. See docs/DATABASE.md.
+      DATABASE_URL: ${DATABASE_URL:-}

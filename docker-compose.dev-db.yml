@@ -1,0 +1,28 @@
+# Disposable local PostgreSQL 18 for development and verification.
+#
+# This profile is NOT part of the Synology stack and never holds real data.
+# It binds to loopback only — no new port exposure beyond this host.
+#
+#   Start:   docker compose -f docker-compose.dev-db.yml up -d
+#   Discard: docker compose -f docker-compose.dev-db.yml down -v
+#
+# Application URL (least-privilege role provisioned by the init script):
+#   postgresql://reelhouse_app:reelhouse_app_dev@127.0.0.1:5433/reelhouse
+services:
+  postgres-dev:
+    image: postgres:18
+    container_name: reelhouse-postgres-dev
+    ports:
+      - "127.0.0.1:5433:5432"
+    environment:
+      POSTGRES_DB: reelhouse
+      POSTGRES_USER: reelhouse_owner
+      POSTGRES_PASSWORD: reelhouse_owner_dev
+    volumes:
+      - ./docker/postgres-dev-init:/docker-entrypoint-initdb.d:ro
+      # PG18+ images want the mount at /var/lib/postgresql (they create a
+      # major-version subdirectory themselves; mounting .../data fails init).
+      - reelhouse-postgres-dev-data:/var/lib/postgresql
+
+volumes:
+  reelhouse-postgres-dev-data:
