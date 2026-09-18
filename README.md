@@ -77,13 +77,23 @@ env vars are unset:
 npm install
 npm run lint
 npm run typecheck
-npm run build && npm start
+npm run build
+npm test
+npm start
 ```
 
+`npm test` runs the route/interaction regression suite
+(`tests/regression.test.mjs`, Node's built-in test runner) against the
+production build: the demo library fallback, the degraded path when
+Jellyfin is unreachable, the mapped Jellyfin success path via a fake
+upstream, and the server-side-only API-key boundary. It starts its own
+`next start` instances on free ports, so run it after `npm run build`.
 Then check `GET /` (app shell), `GET /api/library`, and
 `GET /api/search?q=`. See [docs/BASELINE.md](docs/BASELINE.md) for the
 full imported-source baseline: deployment mapping, data authorities,
-and the PostgreSQL 18 migration surface.
+and the PostgreSQL 18 migration surface. See
+[docs/SECURITY_UPGRADE.md](docs/SECURITY_UPGRADE.md) for the Next.js
+patched-release policy and RH-0008 verification evidence.
 
 ## Security note
 

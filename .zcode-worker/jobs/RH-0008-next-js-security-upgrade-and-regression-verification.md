@@ -1,6 +1,6 @@
 # RH-0008 — Next.js security upgrade and regression verification
 
-**STATUS:** READY
+**STATUS:** REVIEW
 **AGENT:** ZCODE
 **AUTOMATION_ELIGIBLE:** true
 
