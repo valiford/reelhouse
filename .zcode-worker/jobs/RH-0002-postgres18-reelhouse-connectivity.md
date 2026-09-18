@@ -1,6 +1,6 @@
 # RH-0002 — PostgreSQL 18 ReelHouse Connectivity
 
-**STATUS:** READY  
+**STATUS:** REVIEW  
 **AUTOMATION_ELIGIBLE:** true  
 **DEPENDENCY:** RH-0001 accepted — satisfied via PR #1 / `605ee8f`
 
