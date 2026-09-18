@@ -7,7 +7,6 @@ The highest-priority READY job with satisfied dependencies and `AUTOMATION_ELIGI
 | Priority | Job ID | Status | Agent | Description |
 |---:|---|---|---|---|
 | 1 | RH-0008 | READY | ZCODE | Next.js security upgrade and regression verification |
-| 2 | RH-0009 | READY | ZCODE | TV remote keyboard and focus-navigation shell |
 | 3 | RH-0010 | READY | ZCODE | Search filtering pagination and bounded-result contract |
 | 4 | RH-0011 | READY | ZCODE | Responsive home library presentation and poster fallback pass |
 | 5 | RH-0012 | READY | ZCODE | Jellyfin degraded-mode and reconnection UX |
@@ -31,7 +30,9 @@ _None._
 
 ## Review Queue
 
-_None._
+| Priority | Job ID | Status | Agent | Description |
+|---:|---|---|---|---|
+| 2 | RH-0009 | REVIEW | ZCODE | TV remote keyboard and focus-navigation shell |
 
 ## Completed / Integrated
 
