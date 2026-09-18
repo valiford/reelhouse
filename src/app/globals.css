@@ -28,7 +28,7 @@ svg { width: 1.25rem; height: 1.25rem; }
 .profile-pill { border: 1px solid var(--line); background: #121214cc; padding: 5px 10px 5px 5px; display: flex; align-items: center; gap: 9px; border-radius: 999px; cursor: pointer; }
 .profile-pill span, .profile-menu span { display: grid; place-items: center; width: 31px; height: 31px; border-radius: 50%; background: linear-gradient(145deg, #f4b337, #7c4b06); font-size: 11px; font-weight: 800; color: #15100a; }
 .profile-menu { display: none; position: absolute; right: 0; top: calc(100% + 7px); min-width: 160px; padding: 7px; border: 1px solid var(--line); background: #17171af5; border-radius: 12px; box-shadow: 0 18px 50px #000b; }
-.profile-switcher:hover .profile-menu { display: grid; }
+.profile-switcher:hover .profile-menu, .profile-menu.open { display: grid; }
 .profile-menu button { border: 0; background: transparent; display: flex; gap: 9px; align-items: center; padding: 7px; border-radius: 8px; cursor: pointer; text-align: left; }
 .profile-menu button:hover { background: #ffffff0d; }
 .search-panel { position: fixed; z-index: 29; top: 70px; left: 50%; transform: translateX(-50%); width: min(820px, calc(100vw - 38px)); display: flex; align-items: center; gap: 10px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; background: #17171bf5; box-shadow: 0 20px 60px #000a; }
@@ -89,5 +89,23 @@ h1 { font-size: clamp(3rem, 7vw, 6.8rem); line-height: .92; margin: 10px 0 18px;
   .media-row { grid-auto-columns: clamp(145px, 39vw, 190px); }
 }
 @media (min-width: 1200px) {
-  .media-card:focus-visible .poster, .media-card:hover .poster { box-shadow: 0 18px 44px #000c, 0 0 0 2px #e8a3178a; }
+  .media-card:hover .poster { box-shadow: 0 18px 44px #000c, 0 0 0 2px #e8a3178a; }
+}
+
+/* TV remote focus shell: the ring shows while keyboard/remote navigation
+   is active (data-kbd-nav on <html>), and clears on pointer use. Cards
+   carry the ring on the poster so it tracks the lift/scale transform. */
+[data-kbd-nav="true"] button:focus,
+[data-kbd-nav="true"] a:focus,
+[data-kbd-nav="true"] input:focus {
+  outline: 3px solid var(--gold-bright);
+  outline-offset: 3px;
+}
+[data-kbd-nav="true"] .media-card:focus { outline: none; }
+[data-kbd-nav="true"] .media-card:focus .poster,
+.media-card:focus-visible .poster { box-shadow: 0 18px 44px #000c, 0 0 0 3px var(--gold-bright); }
+
+@media (prefers-reduced-motion: reduce) {
+  .media-card { transition: none; }
+  html { scroll-behavior: auto; }
 }

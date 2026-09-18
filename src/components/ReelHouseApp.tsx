@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryPayload, MediaItem } from "@/lib/types";
 import { demoLibrary } from "@/lib/demo";
+import { focusInitialIn, reveal } from "@/lib/tvnav";
+import { useTvNavigation } from "@/hooks/useTvNavigation";
 import { HomeIcon, InfoIcon, PlayIcon, SearchIcon } from "./icons";
 
 const profiles = [
@@ -12,7 +14,12 @@ const profiles = [
 
 function Card({ item, onOpen }: { item: MediaItem; onOpen: (item: MediaItem) => void }) {
   return (
-    <button className="media-card" onClick={() => onOpen(item)} aria-label={`Open ${item.title}`}>
+    <button
+      className="media-card"
+      onClick={() => onOpen(item)}
+      onFocus={(e) => reveal(e.currentTarget)}
+      aria-label={`Open ${item.title}`}
+    >
       <div className="poster" style={item.imageUrl ? { backgroundImage: `url(${item.imageUrl})` } : undefined}>
         {!item.imageUrl && <span>{item.title.slice(0, 1)}</span>}
         <div className="card-gradient" />
@@ -29,13 +36,26 @@ function Card({ item, onOpen }: { item: MediaItem; onOpen: (item: MediaItem) => 
 }
 
 function Details({ item, onClose }: { item: MediaItem; onClose: () => void }) {
+  const shellRef = useRef<HTMLDivElement>(null);
   const jellyfinUrl = process.env.NEXT_PUBLIC_JELLYFIN_URL || "http://localhost:8096";
   const target = item.id.startsWith("demo-") ? undefined : `${jellyfinUrl}/web/index.html#!/details?id=${encodeURIComponent(item.id)}`;
+
+  useEffect(() => {
+    const invoker = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (shellRef.current) focusInitialIn(shellRef.current);
+    return () => {
+      if (invoker && invoker.isConnected) {
+        invoker.focus({ preventScroll: true });
+        reveal(invoker);
+      }
+    };
+  }, [item.id]);
+
   return (
-    <div className="modal-shell" role="dialog" aria-modal="true" onMouseDown={onClose}>
+    <div className="modal-shell" ref={shellRef} data-focus-scope role="dialog" aria-modal="true" aria-label={item.title} onMouseDown={onClose}>
       <section className="details-modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="details-backdrop" style={item.backdropUrl ? { backgroundImage: `url(${item.backdropUrl})` } : undefined} />
-        <button className="close" onClick={onClose}>×</button>
+        <button className="close" onClick={onClose} aria-label="Close details">×</button>
         <div className="details-copy">
           <p className="eyebrow">{item.kind} {item.year ? `• ${item.year}` : ""}</p>
           <h2>{item.title}</h2>
@@ -45,8 +65,10 @@ function Details({ item, onClose }: { item: MediaItem; onClose: () => void }) {
           </div>
           <p>{item.overview || "Metadata will appear here after ReelHouse connects to your Jellyfin library."}</p>
           <div className="detail-actions">
-            {target ? <a className="primary-button" href={target}><PlayIcon /> Play in ReelHouse Engine</a> : <button className="primary-button" disabled><PlayIcon /> Demo item</button>}
-            <button className="secondary-button">＋ Watchlist</button>
+            {target
+              ? <a className="primary-button" href={target} data-autofocus><PlayIcon /> Play in ReelHouse Engine</a>
+              : <button className="primary-button" disabled><PlayIcon /> Demo item</button>}
+            <button className="secondary-button" data-autofocus={!target}>＋ Watchlist</button>
           </div>
         </div>
       </section>
@@ -59,8 +81,13 @@ export default function ReelHouseApp() {
   const [activeProfile, setActiveProfile] = useState(profiles[0]);
   const [selected, setSelected] = useState<MediaItem | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [searchItems, setSearchItems] = useState<MediaItem[]>([]);
+
+  const homeRef = useRef<HTMLButtonElement>(null);
+  const searchToggleRef = useRef<HTMLButtonElement>(null);
+  const profilePillRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     fetch("/api/library").then((r) => r.json()).then(setLibrary).catch(() => undefined);
@@ -78,29 +105,91 @@ export default function ReelHouseApp() {
     return () => { controller.abort(); window.clearTimeout(timer); };
   }, [search]);
 
+  useEffect(() => {
+    if (!profileOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!(e.target instanceof Element) || !e.target.closest(".profile-switcher")) setProfileOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [profileOpen]);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearch("");
+    setSearchItems([]);
+    searchToggleRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  // Back pops the topmost layer only; on home it is a no-op so a stray
+  // remote key never leaves the app.
+  const handleBack = useCallback((): boolean => {
+    if (selected) {
+      setSelected(null);
+      return true;
+    }
+    if (searchOpen) {
+      closeSearch();
+      return true;
+    }
+    if (profileOpen) {
+      setProfileOpen(false);
+      profilePillRef.current?.focus({ preventScroll: true });
+      return true;
+    }
+    return false;
+  }, [selected, searchOpen, profileOpen, closeSearch]);
+
+  useTvNavigation({ onBack: handleBack });
+
+  // Deterministic TV entry point: focus lands on Home once per mount
+  // when nothing else holds focus.
+  useEffect(() => {
+    if (document.activeElement === document.body || !document.activeElement) {
+      homeRef.current?.focus({ preventScroll: true });
+    }
+  }, []);
+
   const heroStyle = useMemo(() => library.hero.backdropUrl ? { backgroundImage: `url(${library.hero.backdropUrl})` } : undefined, [library.hero]);
 
   return (
     <main>
       <header className="topbar">
         <div className="brand"><span className="brand-mark">R</span><span>REELHOUSE</span></div>
-        <nav className="nav-links">
-          <button className="active"><HomeIcon /> Home</button>
+        <nav className="nav-links" aria-label="Primary">
+          <button className="active" ref={homeRef}><HomeIcon /> Home</button>
           <button>Movies</button><button>Shows</button><button>Home Videos</button>
         </nav>
         <div className="top-actions">
-          <button className="icon-button" onClick={() => setSearchOpen((v) => !v)}><SearchIcon /></button>
+          <button
+            className="icon-button"
+            ref={searchToggleRef}
+            aria-label="Search"
+            aria-expanded={searchOpen}
+            aria-controls="reelhouse-search"
+            onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
+          ><SearchIcon /></button>
           <div className="profile-switcher">
-            <button className="profile-pill"><span>{activeProfile.initials}</span>{activeProfile.name}</button>
-            <div className="profile-menu">
-              {profiles.map((p) => <button key={p.name} onClick={() => setActiveProfile(p)}><span>{p.initials}</span>{p.name}</button>)}
+            <button
+              className="profile-pill"
+              ref={profilePillRef}
+              aria-haspopup="true"
+              aria-expanded={profileOpen}
+              onClick={() => setProfileOpen((v) => !v)}
+            ><span>{activeProfile.initials}</span>{activeProfile.name}</button>
+            <div className={profileOpen ? "profile-menu open" : "profile-menu"}>
+              {profiles.map((p) => (
+                <button key={p.name} onClick={() => { setActiveProfile(p); setProfileOpen(false); profilePillRef.current?.focus({ preventScroll: true }); }}>
+                  <span>{p.initials}</span>{p.name}
+                </button>
+              ))}
             </div>
           </div>
         </div>
       </header>
 
-      {searchOpen && <section className="search-panel">
-        <SearchIcon /><input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search movies, shows, home videos…" />
+      {searchOpen && <section className="search-panel" id="reelhouse-search" aria-label="Search library">
+        <SearchIcon /><input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search movies, shows, home videos…" aria-label="Search movies, shows, and home videos" />
         {search && <button onClick={() => setSearch("")}>Clear</button>}
       </section>}
 
