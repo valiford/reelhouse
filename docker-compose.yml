@@ -1,0 +1,31 @@
+services:
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: reelhouse-jellyfin
+    restart: unless-stopped
+    ports:
+      - "8096:8096"
+    volumes:
+      - ./jellyfin-config:/config
+      - ./jellyfin-cache:/cache
+      # Change these Synology paths to match your shared folders.
+      - /volume1/video/Movies:/media/movies:ro
+      - /volume1/video/TV:/media/tv:ro
+      - /volume1/video/HomeVideos:/media/home:ro
+    # Uncomment on Intel/AMD Synology models with /dev/dri for hardware transcoding.
+    # devices:
+    #   - /dev/dri:/dev/dri
+
+  reelhouse:
+    build: .
+    container_name: reelhouse-ui
+    restart: unless-stopped
+    depends_on:
+      - jellyfin
+    ports:
+      - "3210:3000"
+    environment:
+      JELLYFIN_URL: http://jellyfin:8096
+      JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:-}
+      JELLYFIN_USER_ID: ${JELLYFIN_USER_ID:-}
+      NEXT_PUBLIC_JELLYFIN_URL: ${NEXT_PUBLIC_JELLYFIN_URL:-http://localhost:8096}

@@ -1,6 +1,6 @@
 # RH-0001 — Imported Source Baseline Reconciliation
 
-**STATUS:** READY  
+**STATUS:** REVIEW (2026-09-18, branch `rh-0001-imported-source-baseline-reconciliation`)  
 **AUTOMATION_ELIGIBLE:** true  
 **PRIORITY:** 1
 

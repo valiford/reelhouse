@@ -4,13 +4,11 @@ The highest-priority READY job with satisfied dependencies and `AUTOMATION_ELIGI
 
 ## Ready Queue
 
-| Priority | Job ID | Status | Agent | Description |
-|---:|---|---|---|---|
-| 1 | RH-0001 | READY | ZCODE | Reconcile the imported Synology ReelHouse source into a reproducible repository baseline, inventory runtime boundaries, and establish verification without deploying |
+_None._
 
 ## Waiting for imported-source baseline
 
-These jobs are fully specified but must not be claimed until RH-0001 has verified that the existing Synology application source is present on `main`.
+These jobs are fully specified but must not be claimed until RH-0001 has verified that the existing Synology application source is present on `main`. The source now exists on the RH-0001 review branch; this gate clears when RH-0001 is accepted and merged.
 
 | Priority | Job ID | Status | Dependency | Description |
 |---:|---|---|---|---|
@@ -27,7 +25,9 @@ _None._
 
 ## Review Queue
 
-_None._
+| Priority | Job ID | Status | Branch | Description |
+|---:|---|---|---|---|
+| 1 | RH-0001 | REVIEW | `rh-0001-imported-source-baseline-reconciliation` | Imported Synology source reconciled into a verified repository baseline (inventory, deployment mapping, data authorities, PG-18 migration surface in `docs/BASELINE.md`); report in `.zcode-worker/reports/` |
 
 ## Completed / Integrated
 
