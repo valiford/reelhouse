@@ -67,6 +67,24 @@ Build thin clients for Android TV / Fire TV first, then Apple TV / Roku / Samsun
 9. TV remote navigation and 10-foot UI.
 10. Optional remote access without exposing the NAS directly.
 
+## Development & verification
+
+Local development and deterministic verification run on Node 22+ with no
+credentials — the UI serves the built-in demo library when the Jellyfin
+env vars are unset:
+
+```bash
+npm install
+npm run lint
+npm run typecheck
+npm run build && npm start
+```
+
+Then check `GET /` (app shell), `GET /api/library`, and
+`GET /api/search?q=`. See [docs/BASELINE.md](docs/BASELINE.md) for the
+full imported-source baseline: deployment mapping, data authorities,
+and the PostgreSQL 18 migration surface.
+
 ## Security note
 
 Media is mounted read-only. Do not expose ports 8096 or 3210 directly to the public Internet. Use a VPN such as Tailscale for remote access.
