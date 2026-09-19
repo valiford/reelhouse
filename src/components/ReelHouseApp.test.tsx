@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ReelHouseApp from "./ReelHouseApp";
 import type { LibraryPayload, SearchPayload } from "@/lib/types";
@@ -222,5 +222,55 @@ describe("ReelHouseApp library surface", () => {
 
     libraryCall(calls)!.resolve(jsonResponse({ ...LIBRARY, source: "jellyfin" }));
     expect(await screen.findByText("● Connected to ReelHouse Engine")).toBeTruthy();
+  });
+});
+
+describe("ReelHouseApp presentation fallbacks", () => {
+  it("shows a connecting state until the library fetch settles", async () => {
+    const calls = installDeferredFetch();
+    render(<ReelHouseApp />);
+
+    expect(await screen.findByText(/Connecting to ReelHouse Engine/)).toBeTruthy();
+
+    libraryCall(calls)!.resolve(jsonResponse({ ...LIBRARY, source: "jellyfin" }));
+    expect(await screen.findByText("● Connected to ReelHouse Engine")).toBeTruthy();
+  });
+
+  it("falls back to the title initial when poster art fails to load", async () => {
+    const calls = installDeferredFetch();
+    render(<ReelHouseApp />);
+
+    libraryCall(calls)!.resolve(jsonResponse({
+      ...LIBRARY,
+      sections: [{ title: "Movies", items: [{ id: "art-1", title: "Broken Art", kind: "Movie", imageUrl: "https://images.example/broken.jpg" }] }]
+    }));
+    const card = await screen.findByRole("button", { name: "Open Broken Art" });
+    const img = card.querySelector("img.poster-img");
+    expect(img).toBeTruthy();
+    expect(img!.getAttribute("loading")).toBe("lazy");
+
+    fireEvent.error(img!);
+    expect(within(card).getByText("B")).toBeTruthy();
+    expect(card.querySelector("img.poster-img")).toBeNull();
+  });
+
+  it("explains an empty connected library instead of a blank rail", async () => {
+    const calls = installDeferredFetch();
+    render(<ReelHouseApp />);
+
+    libraryCall(calls)!.resolve(jsonResponse({ ...LIBRARY, source: "jellyfin", sections: [] }));
+    expect(await screen.findByText(/nothing is indexed yet/)).toBeTruthy();
+  });
+
+  it("renders a crossfading hero backdrop once the engine supplies one", async () => {
+    const calls = installDeferredFetch();
+    render(<ReelHouseApp />);
+
+    libraryCall(calls)!.resolve(jsonResponse({
+      ...LIBRARY,
+      hero: { id: "h1", title: "Hero Title", kind: "Movie", backdropUrl: "https://images.example/hero.jpg" }
+    }));
+    await screen.findByText("Hero Title");
+    expect(document.querySelector(".hero-bg")).toBeTruthy();
   });
 });

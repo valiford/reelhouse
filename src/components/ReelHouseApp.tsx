@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { LibraryPayload, MediaItem, MediaKind, SearchPayload } from "@/lib/types";
 import { demoLibrary } from "@/lib/demo";
 import { HomeIcon, InfoIcon, PlayIcon, SearchIcon } from "./icons";
@@ -20,11 +20,48 @@ const KIND_FILTERS: Array<{ label: string; value: "" | MediaKind }> = [
   { label: "Videos", value: "Video" }
 ];
 
+function PosterFallback({ title }: { title: string }) {
+  return <span className="poster-fallback" aria-hidden="true">{title.slice(0, 1)}</span>;
+}
+
+// Keyed by image URL at the call site: a payload swap that repoints an item's
+// art remounts this component and re-arms its load/error cycle.
+function PosterImage({ item }: { item: MediaItem }) {
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  // Server-rendered posters can finish (or fail) before hydration attaches
+  // onLoad/onError, so reconcile from the element itself when it attaches.
+  const attach = (img: HTMLImageElement | null) => {
+    if (!img || !img.complete) return;
+    if (img.naturalWidth > 0) setReady(true);
+    else setFailed(true);
+  };
+
+  if (failed) return <PosterFallback title={item.title} />;
+  return (
+    // Posters load directly from the household's Jellyfin host; routing them
+    // through the Next image optimizer is deferred to RH-0013.
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      ref={attach}
+      className={ready ? "poster-img is-ready" : "poster-img"}
+      src={item.imageUrl}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      draggable={false}
+      onLoad={() => setReady(true)}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 function Card({ item, onOpen }: { item: MediaItem; onOpen: (item: MediaItem) => void }) {
   return (
     <button className="media-card" onClick={() => onOpen(item)} aria-label={`Open ${item.title}`}>
-      <div className="poster" style={item.imageUrl ? { backgroundImage: `url(${item.imageUrl})` } : undefined}>
-        {!item.imageUrl && <span>{item.title.slice(0, 1)}</span>}
+      <div className="poster">
+        {item.imageUrl ? <PosterImage key={item.imageUrl} item={item} /> : <PosterFallback title={item.title} />}
         <div className="card-gradient" />
         <div className="card-copy">
           <strong>{item.title}</strong>
@@ -45,7 +82,7 @@ function Details({ item, onClose }: { item: MediaItem; onClose: () => void }) {
     <div className="modal-shell" role="dialog" aria-modal="true" onMouseDown={onClose}>
       <section className="details-modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="details-backdrop" style={item.backdropUrl ? { backgroundImage: `url(${item.backdropUrl})` } : undefined} />
-        <button className="close" onClick={onClose}>×</button>
+        <button className="close" aria-label="Close details" onClick={onClose}>×</button>
         <div className="details-copy">
           <p className="eyebrow">{item.kind} {item.year ? `• ${item.year}` : ""}</p>
           <h2>{item.title}</h2>
@@ -74,6 +111,7 @@ type SearchStatus = "idle" | "loading" | "ready" | "error";
 export default function ReelHouseApp() {
   const [library, setLibrary] = useState<LibraryPayload>(demoLibrary);
   const [libraryError, setLibraryError] = useState(false);
+  const [libraryLoading, setLibraryLoading] = useState(true);
   const [activeProfile, setActiveProfile] = useState(profiles[0]);
   const [selected, setSelected] = useState<MediaItem | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -145,8 +183,16 @@ export default function ReelHouseApp() {
       .catch(() => {
         if (signal?.aborted) return;
         setLibraryError(true);
+      })
+      .finally(() => {
+        if (!signal?.aborted) setLibraryLoading(false);
       });
   }, []);
+
+  const retryLibrary = useCallback(() => {
+    setLibraryLoading(true);
+    loadLibrary();
+  }, [loadLibrary]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -190,8 +236,6 @@ export default function ReelHouseApp() {
     const term = search.trim();
     if (term) runSearch(term, kindFilter, searchOffset + SEARCH_PAGE_SIZE);
   }, [search, kindFilter, searchOffset, runSearch]);
-
-  const heroStyle = useMemo(() => library.hero.backdropUrl ? { backgroundImage: `url(${library.hero.backdropUrl})` } : undefined, [library.hero]);
 
   const searchActive = searchOpen && Boolean(search.trim());
   const showLoadMore = searchStatus === "ready" && searchItems.length > 0 && searchItems.length < searchTotal;
@@ -270,9 +314,16 @@ export default function ReelHouseApp() {
       ) : <>
         {libraryError && <div className="library-banner page-gutter" role="alert">
           <span>Couldn’t reach the ReelHouse API — showing demo titles.</span>
-          <button onClick={() => loadLibrary()}>Retry</button>
+          <button onClick={retryLibrary}>Retry</button>
         </div>}
-        <section className="hero" style={heroStyle}>
+        <section className="hero">
+          {library.hero.backdropUrl && (
+            <div
+              key={library.hero.backdropUrl}
+              className="hero-bg"
+              style={{ backgroundImage: `url(${library.hero.backdropUrl})` }}
+            />
+          )}
           <div className="hero-shade" />
           <div className="hero-content page-gutter">
             <p className="eyebrow">{library.hero.subtitle || "Featured in your library"}</p>
@@ -286,18 +337,29 @@ export default function ReelHouseApp() {
           </div>
         </section>
 
-        <div className="content-rail">
-          <div className={`source-chip${library.degraded ? " degraded" : ""}`}>
-            {library.source === "jellyfin"
-              ? "● Connected to ReelHouse Engine"
-              : library.degraded
-                ? "● ReelHouse Engine unreachable — demo titles shown"
-                : "Demo library • connect Jellyfin to index your NAS"}
+        <div className="content-rail" aria-busy={libraryLoading}>
+          <div
+            className={`source-chip${library.degraded ? " degraded" : ""}${libraryLoading ? " connecting" : ""}`}
+            role="status"
+          >
+            {libraryLoading
+              ? <><span className="chip-dot" aria-hidden="true" />Connecting to ReelHouse Engine…</>
+              : library.source === "jellyfin"
+                ? "● Connected to ReelHouse Engine"
+                : library.degraded
+                  ? "● ReelHouse Engine unreachable — demo titles shown"
+                  : "Demo library • connect Jellyfin to index your NAS"}
           </div>
           {library.sections.map((section) => <section className="media-section" key={section.title}>
             <div className="section-heading page-gutter"><h2>{section.title}</h2><button>See all ›</button></div>
             <div className="media-row page-gutter">{section.items.map((item) => <Card key={`${section.title}-${item.id}`} item={item} onOpen={setSelected} />)}</div>
           </section>)}
+          {library.source === "jellyfin" && library.sections.length === 0 && (
+            <div className="media-empty page-gutter">
+              <p>Connected, but nothing is indexed yet.</p>
+              <p>Once the ReelHouse Engine finishes syncing your Jellyfin libraries, your rows will appear here.</p>
+            </div>
+          )}
         </div>
       </>}
 
