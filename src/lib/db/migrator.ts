@@ -27,7 +27,7 @@ export const MIGRATION_FILE_PATTERN = /^(\d{4})_([a-z0-9_]+)\.sql$/;
 export const MIGRATIONS_ADVISORY_LOCK_KEY = BigInt("726101000726101");
 
 // uuidv7() and the rest of this schema require PostgreSQL 18+.
-const MIN_PG_VERSION_NUM = 180000;
+export const MIN_PG_VERSION_NUM = 180000;
 
 export interface MigrationFile {
   name: string;

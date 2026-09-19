@@ -28,6 +28,8 @@ npm run db:migrate:dry-run      # print the plan without changing anything
 - `MIGRATION_DATABASE_URL` may override `DATABASE_URL` for the runner so
   operators can target a disposable database without touching the app's URL.
 - The URL is never printed; the runner fails closed when it is missing.
+- `npm run db:smoke` runs migrations as part of the full end-to-end check —
+  see [DB_SMOKE.md](DB_SMOKE.md) before pointing it at a new environment.
 - PostgreSQL **18+ is enforced** (`SHOW server_version`): the schema uses
   native `uuidv7()` and refuses to run on older servers.
 - Runs hold a session advisory lock (key `726101000726101`), so two runners

@@ -4,7 +4,9 @@ How the ReelHouse server connects to the household PostgreSQL 18 service.
 Scope of this document: the server-side connection abstraction —
 configuration, pooling, timeouts, redaction, and health. Not in scope:
 schema and migrations (RH-0003), catalog sync (RH-0004), persistence
-features (RH-0005+), API contract hardening (RH-0006).
+features (RH-0005+), API contract hardening (RH-0006). The end-to-end
+verification entry point for all of it lives in
+[DB_SMOKE.md](DB_SMOKE.md).
 
 ## Layout
 

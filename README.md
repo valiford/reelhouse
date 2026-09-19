@@ -95,13 +95,16 @@ The `reelhouse` PostgreSQL 18 schema is versioned and forward-only:
 ```bash
 npm run db:migrate              # apply pending migrations (DATABASE_URL)
 npm run db:migrate:dry-run      # print the plan, change nothing
+npm run db:smoke                # end-to-end smoke: connect + migrate + pool + transactions
 npm run test:db:up              # disposable PostgreSQL 18 for tests
-npm test && npm run test:db     # unit + migration integration suites
+npm test && npm run test:db     # unit + migration/smoke integration suites
 npm run test:db:down            # discard the disposable database
 ```
 
 See [docs/MIGRATIONS.md](docs/MIGRATIONS.md) for the model, history
-verification, and rollback/recovery policy.
+verification, and rollback/recovery policy, and
+[docs/DB_SMOKE.md](docs/DB_SMOKE.md) for the end-to-end smoke runbook
+(including the pre-acceptance gate for the production Synology database).
 
 ## Security note
 
