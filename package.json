@@ -7,15 +7,23 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test src/lib/db/migrator.test.ts",
+    "test:db": "node --test src/lib/db/migrations.int.test.ts",
+    "test:db:up": "docker compose -f docker-compose.test-db.yml up -d --wait",
+    "test:db:down": "docker compose -f docker-compose.test-db.yml down -v",
+    "db:migrate": "node scripts/db-migrate.ts",
+    "db:migrate:dry-run": "node scripts/db-migrate.ts --dry-run"
   },
   "dependencies": {
     "next": "16.0.1",
+    "pg": "^8.23.0",
     "react": "19.2.0",
     "react-dom": "19.2.0"
   },
   "devDependencies": {
     "@types/node": "24.10.0",
+    "@types/pg": "^8.23.1",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
     "eslint": "9.39.1",

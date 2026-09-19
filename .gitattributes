@@ -1,0 +1,3 @@
+# Migration SQL must hash identically in every checkout; LF line endings are
+# pinned here and the runner additionally normalizes CRLF before checksumming.
+db/migrations/*.sql text eol=lf

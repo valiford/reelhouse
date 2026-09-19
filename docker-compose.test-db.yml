@@ -1,0 +1,28 @@
+# Disposable PostgreSQL 18 for migration/schema testing only.
+# This file never touches the production Synology compose stack
+# (docker-compose.yml) and holds no real data: the database lives on tmpfs
+# and is discarded by `npm run test:db:down`.
+#
+#   npm run test:db:up      start (port 55433 to avoid clashing with any
+#                           local PostgreSQL instances)
+#   npm run test:db         run the migration integration suite
+#   npm run test:db:down    stop and discard
+services:
+  pg18-test:
+    image: postgres:18
+    container_name: reelhouse-pg18-test
+    environment:
+      POSTGRES_USER: reelhouse_test
+      POSTGRES_PASSWORD: reelhouse_test
+      POSTGRES_DB: reelhouse_test
+    ports:
+      - "55433:5432"
+    tmpfs:
+      # postgres:18 images keep PGDATA below /var/lib/postgresql; mounting
+      # the parent keeps the entrypoint happy and the data disposable.
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reelhouse_test -d reelhouse_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
