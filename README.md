@@ -88,6 +88,21 @@ Then check `GET /` (app shell), `GET /api/library`,
 baseline: deployment mapping, data authorities, and the PostgreSQL 18
 migration surface.
 
+## Database schema & migrations
+
+The `reelhouse` PostgreSQL 18 schema is versioned and forward-only:
+
+```bash
+npm run db:migrate              # apply pending migrations (DATABASE_URL)
+npm run db:migrate:dry-run      # print the plan, change nothing
+npm run test:db:up              # disposable PostgreSQL 18 for tests
+npm test && npm run test:db     # unit + migration integration suites
+npm run test:db:down            # discard the disposable database
+```
+
+See [docs/MIGRATIONS.md](docs/MIGRATIONS.md) for the model, history
+verification, and rollback/recovery policy.
+
 ## Security note
 
 Media is mounted read-only. Do not expose ports 8096 or 3210 directly to the public Internet. Use a VPN such as Tailscale for remote access.

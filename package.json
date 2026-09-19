@@ -8,7 +8,13 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/lib/db/config.test.ts"
+    "test": "node --test src/lib/db/config.test.ts src/lib/db/migrator.test.ts",
+    "test:db": "node --test src/lib/db/migrations.int.test.ts",
+    "test:db:up": "docker compose -f docker-compose.test-db.yml up -d --wait",
+    "test:db:down": "docker compose -f docker-compose.test-db.yml down -v",
+    "db:migrate": "node scripts/db-migrate.ts",
+    "db:migrate:dry-run": "node scripts/db-migrate.ts --dry-run",
+    "db:smoke": "node scripts/db-smoke.ts"
   },
   "dependencies": {
     "next": "16.0.1",

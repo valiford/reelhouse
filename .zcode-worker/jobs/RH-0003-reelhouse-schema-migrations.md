@@ -1,6 +1,6 @@
 # RH-0003 — ReelHouse Schema and Versioned Migrations
 
-**STATUS:** READY  
+**STATUS:** REVIEW  
 **AUTOMATION_ELIGIBLE:** true  
 **DEPENDENCY:** RH-0001 accepted — satisfied via PR #1 / `605ee8f`
 

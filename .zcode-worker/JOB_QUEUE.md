@@ -20,7 +20,7 @@ The highest-priority READY job with satisfied dependencies and `AUTOMATION_ELIGI
 | 5 | RH-0012 | READY | ZCODE | Jellyfin degraded-mode and reconnection UX |
 | 6 | RH-0013 | READY | ZCODE | Poster image loading and performance guard |
 | 7 | RH-0014 | READY | ZCODE | Accessibility and reduced-motion regression suite |
-| 3 | RH-0003 | READY | ZCODE | Add versioned PostgreSQL migrations for household profiles, preferences, watch state, favorites, watchlists, collections, Jellyfin links, and sync metadata |
+| 2 | RH-0002 | READY | ZCODE | Connect the ReelHouse server-side data layer to the existing Synology PostgreSQL 18 `reelhouse` database with safe environment/secrets handling |
 | 4 | RH-0004 | READY | ZCODE | Build Jellyfin API to `media_catalog` synchronization with stable item identity, provenance, freshness, and idempotent reconciliation |
 
 ## Waiting for dependencies
@@ -39,7 +39,7 @@ _None._
 
 | Priority | Job ID | Status | Agent | Description |
 |---:|---|---|---|---|
-| 2 | RH-0002 | REVIEW | ZCODE | Connect the ReelHouse server-side data layer to the existing Synology PostgreSQL 18 `reelhouse` database with safe environment/secrets handling |
+| 3 | RH-0003 | REVIEW | ZCODE | Add versioned PostgreSQL migrations for household profiles, preferences, watch state, favorites, watchlists, collections, Jellyfin links, and sync metadata |
 
 ## Completed / Integrated
 
