@@ -14,7 +14,7 @@ A private, household media interface for Synology NAS users. ReelHouse uses Jell
 - Dark amber streaming UI
 - Household profiles for V’Ali and Nicole
 - Continue Watching / Recently Added / Movies / Shows rails
-- Search
+- Search with bounded pagination, type filters, and explicit empty/error states
 - Metadata detail modal
 - Jellyfin library connection with demo fallback
 - Docker Compose for Synology
@@ -77,11 +77,13 @@ env vars are unset:
 npm install
 npm run lint
 npm run typecheck
+npm test
 npm run build && npm start
 ```
 
 Then check `GET /` (app shell), `GET /api/library`, and
-`GET /api/search?q=`. See [docs/BASELINE.md](docs/BASELINE.md) for the
+`GET /api/search?q=`. The bounded search/library request contract is
+documented in [docs/SEARCH_LIBRARY_CONTRACT.md](docs/SEARCH_LIBRARY_CONTRACT.md). See [docs/BASELINE.md](docs/BASELINE.md) for the
 full imported-source baseline: deployment mapping, data authorities,
 and the PostgreSQL 18 migration surface.
 

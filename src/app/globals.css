@@ -91,3 +91,17 @@ h1 { font-size: clamp(3rem, 7vw, 6.8rem); line-height: .92; margin: 10px 0 18px;
 @media (min-width: 1200px) {
   .media-card:focus-visible .poster, .media-card:hover .poster { box-shadow: 0 18px 44px #000c, 0 0 0 2px #e8a3178a; }
 }
+.search-toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.filter-chip { border: 1px solid var(--line); background: #18181bcc; color: #bdbdc3; border-radius: 999px; padding: 7px 13px; font-size: .82rem; cursor: pointer; }
+.filter-chip:hover { color: white; background: #ffffff0d; }
+.filter-chip.active { color: #15100a; font-weight: 700; background: linear-gradient(135deg, var(--gold-bright), var(--gold)); border-color: transparent; }
+.state-note { color: var(--muted); padding: 26px 0 60px; }
+.state-note p { margin: 0 0 8px; }
+.empty-state p:first-child { color: var(--text); font-size: 1.1rem; }
+.error-state p { color: #ffb4a2; }
+.error-state button, .library-banner button { border: 1px solid var(--line); background: #ffffff0d; color: var(--text); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+.error-state button:hover, .library-banner button:hover { background: #ffffff1a; }
+.load-more-row { display: flex; justify-content: center; padding: 18px 0 80px; }
+.library-banner { display: flex; align-items: center; gap: 14px; padding-top: 92px; color: #ffb4a2; font-size: .9rem; }
+.library-banner button { color: #ffd7cd; }
+.source-chip.degraded { color: #ffb4a2; border-color: #ffb4a24d; }

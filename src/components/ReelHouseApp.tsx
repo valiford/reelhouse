@@ -1,13 +1,23 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { LibraryPayload, MediaItem } from "@/lib/types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { LibraryPayload, MediaItem, MediaKind, SearchPayload } from "@/lib/types";
 import { demoLibrary } from "@/lib/demo";
 import { HomeIcon, InfoIcon, PlayIcon, SearchIcon } from "./icons";
 
 const profiles = [
   { name: "V’Ali", initials: "VA" },
   { name: "Nicole", initials: "NF" }
+];
+
+const SEARCH_PAGE_SIZE = 24;
+
+const KIND_FILTERS: Array<{ label: string; value: "" | MediaKind }> = [
+  { label: "All", value: "" },
+  { label: "Movies", value: "Movie" },
+  { label: "Series", value: "Series" },
+  { label: "Episodes", value: "Episode" },
+  { label: "Videos", value: "Video" }
 ];
 
 function Card({ item, onOpen }: { item: MediaItem; onOpen: (item: MediaItem) => void }) {
@@ -54,31 +64,137 @@ function Details({ item, onClose }: { item: MediaItem; onClose: () => void }) {
   );
 }
 
+function appendUnique(existing: MediaItem[], incoming: MediaItem[]): MediaItem[] {
+  const seen = new Set(existing.map((item) => item.id));
+  return [...existing, ...incoming.filter((item) => !seen.has(item.id))];
+}
+
+type SearchStatus = "idle" | "loading" | "ready" | "error";
+
 export default function ReelHouseApp() {
   const [library, setLibrary] = useState<LibraryPayload>(demoLibrary);
+  const [libraryError, setLibraryError] = useState(false);
   const [activeProfile, setActiveProfile] = useState(profiles[0]);
   const [selected, setSelected] = useState<MediaItem | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [kindFilter, setKindFilter] = useState<"" | MediaKind>("");
+  const [searchStatus, setSearchStatus] = useState<SearchStatus>("idle");
   const [searchItems, setSearchItems] = useState<MediaItem[]>([]);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [searchOffset, setSearchOffset] = useState(0);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
 
-  useEffect(() => {
-    fetch("/api/library").then((r) => r.json()).then(setLibrary).catch(() => undefined);
+  const searchSeq = useRef(0);
+  const searchAbort = useRef<AbortController | null>(null);
+
+  const runSearch = useCallback((term: string, kind: "" | MediaKind, offset: number) => {
+    const requestId = ++searchSeq.current;
+    searchAbort.current?.abort();
+    const controller = new AbortController();
+    searchAbort.current = controller;
+
+    const params = new URLSearchParams({ q: term, limit: String(SEARCH_PAGE_SIZE), offset: String(offset) });
+    if (kind) params.set("kind", kind);
+    if (offset === 0) {
+      setSearchStatus("loading");
+      setSearchError(null);
+    } else {
+      setLoadingMore(true);
+    }
+
+    fetch(`/api/search?${params}`, { signal: controller.signal })
+      .then(async (response) => {
+        const body = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(body?.error?.message || `Search failed (HTTP ${response.status}).`);
+        }
+        return body as SearchPayload;
+      })
+      .then((payload) => {
+        // Stale-response guard: only the most recently issued request may
+        // touch state, even if an aborted one resolves first.
+        if (requestId !== searchSeq.current) return;
+        setSearchTotal(payload.total);
+        setSearchOffset(payload.offset);
+        setSearchItems((prev) => payload.offset === 0 ? payload.items : appendUnique(prev, payload.items));
+        setSearchError(null);
+        setSearchStatus("ready");
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted || requestId !== searchSeq.current) return;
+        setSearchError(error instanceof Error ? error.message : "Search failed.");
+        setSearchStatus("error");
+      })
+      .finally(() => {
+        if (requestId === searchSeq.current) setLoadingMore(false);
+      });
+  }, []);
+
+  const loadLibrary = useCallback((signal?: AbortSignal) => {
+    fetch("/api/library", { signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Library failed (HTTP ${response.status}).`);
+        return response.json() as Promise<LibraryPayload>;
+      })
+      .then((payload) => {
+        setLibrary(payload);
+        setLibraryError(false);
+      })
+      .catch(() => {
+        if (signal?.aborted) return;
+        setLibraryError(true);
+      });
   }, []);
 
   useEffect(() => {
     const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      if (!search.trim()) return setSearchItems([]);
-      fetch(`/api/search?q=${encodeURIComponent(search)}`, { signal: controller.signal })
-        .then((r) => r.json())
-        .then((x) => setSearchItems(x.items || []))
-        .catch(() => undefined);
-    }, 220);
-    return () => { controller.abort(); window.clearTimeout(timer); };
-  }, [search]);
+    loadLibrary(controller.signal);
+    return () => controller.abort();
+  }, [loadLibrary]);
+
+  const resetSearchState = useCallback(() => {
+    setSearchStatus("idle");
+    setSearchItems([]);
+    setSearchTotal(0);
+    setSearchOffset(0);
+    setSearchError(null);
+  }, []);
+
+  const handleSearchChange = useCallback((value: string) => {
+    setSearch(value);
+    if (!value.trim()) resetSearchState();
+  }, [resetSearchState]);
+
+  useEffect(() => {
+    const term = search.trim();
+    if (!term) {
+      searchSeq.current += 1;
+      searchAbort.current?.abort();
+      return;
+    }
+    const timer = window.setTimeout(() => runSearch(term, kindFilter, 0), 220);
+    return () => {
+      window.clearTimeout(timer);
+      searchAbort.current?.abort();
+    };
+  }, [search, kindFilter, runSearch]);
+
+  const retrySearch = useCallback(() => {
+    const term = search.trim();
+    if (term) runSearch(term, kindFilter, 0);
+  }, [search, kindFilter, runSearch]);
+
+  const loadMore = useCallback(() => {
+    const term = search.trim();
+    if (term) runSearch(term, kindFilter, searchOffset + SEARCH_PAGE_SIZE);
+  }, [search, kindFilter, searchOffset, runSearch]);
 
   const heroStyle = useMemo(() => library.hero.backdropUrl ? { backgroundImage: `url(${library.hero.backdropUrl})` } : undefined, [library.hero]);
+
+  const searchActive = searchOpen && Boolean(search.trim());
+  const showLoadMore = searchStatus === "ready" && searchItems.length > 0 && searchItems.length < searchTotal;
 
   return (
     <main>
@@ -89,7 +205,7 @@ export default function ReelHouseApp() {
           <button>Movies</button><button>Shows</button><button>Home Videos</button>
         </nav>
         <div className="top-actions">
-          <button className="icon-button" onClick={() => setSearchOpen((v) => !v)}><SearchIcon /></button>
+          <button className="icon-button" aria-label="Toggle search" onClick={() => setSearchOpen((v) => !v)}><SearchIcon /></button>
           <div className="profile-switcher">
             <button className="profile-pill"><span>{activeProfile.initials}</span>{activeProfile.name}</button>
             <div className="profile-menu">
@@ -100,16 +216,62 @@ export default function ReelHouseApp() {
       </header>
 
       {searchOpen && <section className="search-panel">
-        <SearchIcon /><input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search movies, shows, home videos…" />
-        {search && <button onClick={() => setSearch("")}>Clear</button>}
+        <SearchIcon /><input autoFocus value={search} onChange={(e) => handleSearchChange(e.target.value)} placeholder="Search movies, shows, home videos…" />
+        {search && <button onClick={() => handleSearchChange("")}>Clear</button>}
       </section>}
 
-      {searchOpen && search.trim() ? (
-        <section className="search-results page-gutter">
-          <div className="section-heading"><h2>Search results</h2><span>{searchItems.length} matches</span></div>
-          <div className="poster-grid">{searchItems.map((item) => <Card key={item.id} item={item} onOpen={setSelected} />)}</div>
+      {searchActive ? (
+        <section className="search-results page-gutter" aria-live="polite">
+          <div className="search-toolbar">
+            {KIND_FILTERS.map((filter) => (
+              <button
+                key={filter.label}
+                className={filter.value === kindFilter ? "filter-chip active" : "filter-chip"}
+                onClick={() => setKindFilter(filter.value)}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+          <div className="section-heading">
+            <h2>Search results</h2>
+            <span>
+              {searchStatus === "loading" && "Searching…"}
+              {searchStatus === "ready" && (searchTotal > searchItems.length ? `${searchItems.length} of ${searchTotal} matches` : `${searchItems.length} matches`)}
+              {searchStatus === "error" && "Search unavailable"}
+            </span>
+          </div>
+          {searchStatus === "loading" && <p className="state-note">Searching for “{search.trim()}”…</p>}
+          {searchStatus === "error" && (
+            <div className="state-note error-state" role="alert">
+              <p>{searchError || "Search is temporarily unavailable."}</p>
+              <button onClick={retrySearch}>Retry</button>
+            </div>
+          )}
+          {searchStatus === "ready" && searchItems.length === 0 && (
+            <div className="state-note empty-state">
+              <p>No matches for “{search.trim()}”{kindFilter ? ` in ${KIND_FILTERS.find((f) => f.value === kindFilter)?.label}` : ""}.</p>
+              <p>Try a shorter term or a different type filter.</p>
+            </div>
+          )}
+          {searchItems.length > 0 && (
+            <div className="poster-grid">
+              {searchItems.map((item) => <Card key={item.id} item={item} onOpen={setSelected} />)}
+            </div>
+          )}
+          {showLoadMore && (
+            <div className="load-more-row">
+              <button className="secondary-button" onClick={loadMore} disabled={loadingMore}>
+                {loadingMore ? "Loading…" : `Load more (${searchTotal - searchItems.length} remaining)`}
+              </button>
+            </div>
+          )}
         </section>
       ) : <>
+        {libraryError && <div className="library-banner page-gutter" role="alert">
+          <span>Couldn’t reach the ReelHouse API — showing demo titles.</span>
+          <button onClick={() => loadLibrary()}>Retry</button>
+        </div>}
         <section className="hero" style={heroStyle}>
           <div className="hero-shade" />
           <div className="hero-content page-gutter">
@@ -125,7 +287,13 @@ export default function ReelHouseApp() {
         </section>
 
         <div className="content-rail">
-          <div className="source-chip">{library.source === "jellyfin" ? "● Connected to ReelHouse Engine" : "Demo library • connect Jellyfin to index your NAS"}</div>
+          <div className={`source-chip${library.degraded ? " degraded" : ""}`}>
+            {library.source === "jellyfin"
+              ? "● Connected to ReelHouse Engine"
+              : library.degraded
+                ? "● ReelHouse Engine unreachable — demo titles shown"
+                : "Demo library • connect Jellyfin to index your NAS"}
+          </div>
           {library.sections.map((section) => <section className="media-section" key={section.title}>
             <div className="section-heading page-gutter"><h2>{section.title}</h2><button>See all ›</button></div>
             <div className="media-row page-gutter">{section.items.map((item) => <Card key={`${section.title}-${item.id}`} item={item} onOpen={setSelected} />)}</div>
