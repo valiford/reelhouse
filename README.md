@@ -124,6 +124,17 @@ the retirement policy are documented in
 missing credentials and never writes to Jellyfin or to the `reelhouse`
 database.
 
+## Household state API
+
+ReelHouse-owned household state — profiles, per-profile preferences, the
+watch/continue-watching overlay, and Jellyfin account links — persists in
+the `reelhouse` PostgreSQL 18 database and is served to clients only
+through the ReelHouse API (`/api/profiles…`), never through direct
+database access. Progress writes are transactional and support safe
+retries via `Idempotency-Key`; every response message is bounded and
+value-free. See [docs/HOUSEHOLD_STATE.md](docs/HOUSEHOLD_STATE.md) for
+the route contract, identity rules, and error semantics.
+
 ## Security note
 
 Media is mounted read-only. Do not expose ports 8096 or 3210 directly to the public Internet. Use a VPN such as Tailscale for remote access.
