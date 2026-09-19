@@ -16,7 +16,7 @@ A private, household media interface for Synology NAS users. ReelHouse uses Jell
 - Continue Watching / Recently Added / Movies / Shows rails
 - Search with bounded pagination, type filters, and explicit empty/error states
 - Metadata detail modal
-- Jellyfin library connection with demo fallback
+- Jellyfin library connection with demo fallback and automatic reconnection (unavailable / stale / reconnecting / recovery states)
 - Docker Compose for Synology
 - Read-only media mounts
 - Optional /dev/dri hardware transcoding passthrough
@@ -63,6 +63,37 @@ rules, and test coverage.
 
 ### Later
 Build thin clients for Android TV / Fire TV first, then Apple TV / Roku / Samsung / LG as needed. All clients use the same ReelHouse/Jellyfin backend.
+
+## Media engine connection states
+
+The UI treats the ReelHouse Engine (the server-side Jellyfin API layer)
+as a live connection with explicit states, so a slow, unreachable, or
+misbehaving Jellyfin never shows up as a silent blank page:
+
+- **Connecting** — the first library load is in flight.
+- **Connected** — Jellyfin served the library; a quiet health refresh
+  runs every 60 s so later outages are detected without user
+  interaction.
+- **Unavailable** — the engine did not answer (or answered with
+  malformed data) and there is nothing better to show: demo titles
+  stand in, a banner names the bounded failure reason, and an
+  automatic reconnect cycle starts.
+- **Stale** — the engine dropped while engine data was already on
+  screen: the last synced library stays visible (amber banner + chip)
+  instead of being swapped for demo titles, and the reconnect cycle
+  runs.
+- **Reconnecting** — retries follow a bounded backoff ladder
+  (2 s → 4 s → 8 s → 16 s → 30 s cap) with the attempt count shown on
+  the source chip; manual Retry stays available at any time.
+- **Recovery** — the first good answer after a degraded period ends
+  the cycle, refreshes the data, and flashes a transient “Reconnected”
+  chip before settling back to Connected.
+
+Every engine request also carries a 12 s client deadline, so a hung
+Jellyfin degrades into an explicit state rather than an endless
+spinner. Diagnostics stay bounded and redacted: only short
+status-style messages are surfaced to the UI, never URLs, payloads, or
+household queries.
 
 ## Planned capabilities
 

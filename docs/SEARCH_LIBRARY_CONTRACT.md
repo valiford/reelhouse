@@ -46,9 +46,10 @@ Validation failures return **400** with:
   items (1–50).
 - Response: the library payload (`source`, `hero`, `sections`), with
   `degraded: true` added when Jellyfin was expected to serve the
-  request but the route fell back to demo data. Missing credentials
-  return plain demo data with no `degraded` flag (demo mode, not
-  degradation).
+  request but the route fell back to demo data, plus a bounded,
+  redacted `degradedReason` naming why (upstream status, malformed
+  upstream data, network failure). Missing credentials return plain
+  demo data with no `degraded` flag (demo mode, not degradation).
 - Both demo and live payloads honor `sections`/`limit` so the
   contract is identical in either mode.
 
@@ -58,10 +59,17 @@ Validation failures return **400** with:
   new input, filter change, clear, and unmount.
 - Sequence guard: only the most recently issued request may commit
   results, so a late stale response can never overwrite fresh ones.
-- Explicit states: `Searching…`, `No matches for “…”`, and an error
-  panel with Retry; a degraded library chip appears when the payload
-  is flagged `degraded`, and a banner with Retry appears when
-  `/api/library` itself fails.
+- Explicit search states: `Searching…`, `No matches for “…”`, and an
+  error panel with Retry; timeouts (12 s client deadline) and
+  malformed search payloads surface as explicit errors, and aborted
+  superseded requests never surface at all.
+- Library connection lifecycle (see README “Media engine connection
+  states”): connecting → connected, or unavailable (demo titles stand
+  in) / stale (last-good engine data stays) when the engine is slow,
+  unreachable, or malformed, each with an automatic bounded-backoff
+  reconnect cycle (attempt counter on the chip), a 60 s quiet health
+  refresh while healthy, a transient “Reconnected” acknowledgment on
+  recovery, and banners that name the bounded failure reason.
 - Load-more paging appends pages and deduplicates by `id`; the button
   reports remaining matches and disappears when the result set is
   exhausted.

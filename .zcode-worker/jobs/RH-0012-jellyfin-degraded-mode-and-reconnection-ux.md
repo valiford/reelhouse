@@ -1,6 +1,6 @@
 # RH-0012 — Jellyfin degraded-mode and reconnection UX
 
-**STATUS:** READY
+**STATUS:** REVIEW
 **AGENT:** ZCODE
 **AUTOMATION_ELIGIBLE:** true
 
