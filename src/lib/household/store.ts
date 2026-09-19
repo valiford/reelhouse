@@ -1,829 +1,659 @@
-// Household persistence store (RH-0018): favorites, watchlists, curated
-// collections, collection membership, and home-row configuration over the
-// RH-0003 schema in the `reelhouse` database.
+// ReelHouse-owned household state persistence (RH-0017).
 //
-// Design:
-// - Every function takes a QueryExecutor (pg Pool or an in-transaction
-//   PoolClient). Multi-step operations run inside withTransaction() so they
-//   commit or roll back as one unit; the idempotency layer (idempotency.ts)
-   //   wraps the same transaction so a mutation and its idempotency record
-//   commit atomically.
-// - Profile isolation is enforced in SQL: profile-owned rows are always
-//   addressed by (id, profile_id) pairs, so another profile's rows are
-//   indistinguishable from absent rows (404, never a 403 existence leak).
-// - Item positions need not be contiguous (RH-0003's contract): an explicit
-//   position splices (neighbors shift), reads order by (position, added_at,
-//   id), and reorder renumbers 1..n only when the submitted set equals the
-//   current set — anything else is stale_order_set (409).
-// - Identity of media is (source, external_id) via media_item_ref; rows are
-//   resolved-or-created on write and required on read. Jellyfin ids are data
-//   here, never identity, and Jellyfin itself is never contacted.
-// - This module deliberately avoids `server-only` and the `@/` alias so the
-//   integration tests can import it under plain Node; routes reach it only
-//   through the server (pool.ts carries the server-only boundary).
+// Data access for household profiles, per-profile preferences, the watch /
+// continue-watching overlay, Jellyfin account links, the stable media-item
+// bridge, and sync metadata — all in the PG18 `reelhouse` database, all
+// reached only through this server-side layer (clients never see SQL or
+// credentials, per docs/ARCHITECTURE.md).
+//
+// Split design mirrors src/lib/db/smoke.ts: the runner is injected, this
+// module is deliberately free of `server-only` and the `@/` alias, and its pg
+// import is type-only — so route handlers, the Next.js server runtime, and
+// plain-Node tests (unit fixtures or a real disposable PG18) can all drive
+// the same functions. Transactional callers pass a transaction-scoped runner
+// via transact(); single-statement callers pass the pool or a client.
 
-import type { Pool, QueryResult, QueryResultRow } from "pg";
-import { HouseholdError } from "./errors.ts";
-import type { ValidatedHomeRowSource, ValidatedMediaRef } from "./model.ts";
-import { iso } from "./model.ts";
+import { createHash } from "node:crypto";
+import type { QueryResult, QueryResultRow } from "pg";
+import {
+  HouseholdConflictError,
+  HouseholdInputError,
+  HouseholdNotFoundError,
+  classifyPgError,
+  describePgErrorKind
+} from "./errors.ts";
 
-// Structural subset satisfied by pg Pool, pg PoolClient, and test doubles.
-export interface QueryExecutor {
-  query<T extends QueryResultRow = QueryResultRow>(text: string, params?: unknown[]): Promise<QueryResult<T>>;
+// Anything pg Client / PoolClient / Pool satisfies structurally.
+export interface SqlRunner {
+  query<R extends QueryResultRow = QueryResultRow>(
+    text: string,
+    params?: unknown[]
+  ): Promise<QueryResult<R>>;
 }
 
-// ---- Views -----------------------------------------------------------------
-
-export interface MediaRefView {
-  mediaRefId: string;
-  source: string;
-  externalId: string;
+export interface TransactionSource {
+  connect(): Promise<SqlRunner & { release(): void }>;
 }
 
-export interface FavoriteView extends MediaRefView {
-  profileId: string;
-  createdAt: string;
-}
-
-export interface WatchlistSummary {
-  id: string;
-  profileId: string;
-  name: string;
-  itemCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface WatchlistItemView extends MediaRefView {
-  mediaRefId: string;
-  source: string;
-  externalId: string;
-  position: number;
-  addedAt: string;
-}
-
-export interface WatchlistDetail {
-  id: string;
-  profileId: string;
-  name: string;
-  createdAt: string;
-  updatedAt: string;
-  items: WatchlistItemView[];
-}
-
-export interface CollectionSummary {
-  id: string;
-  name: string;
-  description: string;
-  itemCount: number;
-  createdByProfileId: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface CollectionDetail {
-  id: string;
-  name: string;
-  description: string;
-  createdByProfileId: string | null;
-  createdAt: string;
-  updatedAt: string;
-  items: WatchlistItemView[];
-}
-
-export interface HomeRowView {
-  id: string;
-  rowKey: string;
-  title: string;
-  sourceKind: string;
-  sourceKey: string | null;
-  collectionId: string | null;
-  position: number;
-  isEnabled: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-// ---- Transactions ----------------------------------------------------------
-
-export async function withTransaction<T>(pool: Pool, fn: (db: QueryExecutor) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
+// Runs fn atomically: COMMIT on success, ROLLBACK (best effort — the original
+// error is the one that matters) and client release on failure. Pools check
+// clients out per connect(); Clients are their own transaction and would
+// double as both endpoints in tests.
+export async function transact<R>(
+  source: TransactionSource,
+  fn: (tx: SqlRunner) => Promise<R>
+): Promise<R> {
+  const client = await source.connect();
   try {
     await client.query("BEGIN");
-    let result: T;
-    try {
-      result = await fn(client);
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    }
+    const result = await fn(client);
     await client.query("COMMIT");
     return result;
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // Surface the original failure, not the rollback's.
+    }
+    throw error;
   } finally {
     client.release();
   }
 }
 
-// ---- Profiles and media identity -------------------------------------------
+// ---------------------------------------------------------------- rows/json
 
-// Fail closed on unknown profiles: every profile-scoped operation validates
-// existence first so stale clients get a clean 404 instead of FK errors.
-export async function requireProfile(db: QueryExecutor, profileId: string): Promise<void> {
-  const result = await db.query("SELECT 1 FROM household_profile WHERE id = $1", [profileId]);
-  if (result.rowCount === 0) throw new HouseholdError("profile_not_found", "Profile does not exist");
-}
-
-// Resolve-or-create the (source, external_id) bridge row. Creating is safe:
-// media_item_ref is ReelHouse-owned identity mapping, not Jellyfin state.
-export async function resolveMediaRef(db: QueryExecutor, media: ValidatedMediaRef): Promise<string> {
-  const inserted = await db.query<{ id: string }>(
-    "INSERT INTO media_item_ref (source, external_id) VALUES ($1, $2) ON CONFLICT (source, external_id) DO NOTHING RETURNING id",
-    [media.source, media.externalId]
-  );
-  if (inserted.rowCount === 1) return inserted.rows[0].id;
-  const existing = await db.query<{ id: string }>(
-    "SELECT id FROM media_item_ref WHERE source = $1 AND external_id = $2",
-    [media.source, media.externalId]
-  );
-  return existing.rows[0].id;
-}
-
-// Read-side counterpart: a favorite/watchlist/collection cannot be expected
-// to reference media ReelHouse has never seen.
-export async function requireMediaRef(db: QueryExecutor, media: ValidatedMediaRef): Promise<string> {
-  const result = await db.query<{ id: string }>(
-    "SELECT id FROM media_item_ref WHERE source = $1 AND external_id = $2",
-    [media.source, media.externalId]
-  );
-  if (result.rowCount === 0) {
-    throw new HouseholdError("media_ref_not_found", "Media item is not known to ReelHouse");
-  }
-  return result.rows[0].id;
-}
-
-async function mediaRefById(db: QueryExecutor, mediaRefId: string): Promise<MediaRefView> {
-  const result = await db.query<{ id: string; source: string; external_id: string }>(
-    "SELECT id, source, external_id FROM media_item_ref WHERE id = $1",
-    [mediaRefId]
-  );
-  const row = result.rows[0];
-  return { mediaRefId: row.id, source: row.source, externalId: row.external_id };
-}
-
-// ---- Favorites --------------------------------------------------------------
-
-export async function addFavorite(
-  db: QueryExecutor,
-  profileId: string,
-  mediaRefId: string
-): Promise<{ favorite: FavoriteView; created: boolean }> {
-  const inserted = await db.query<{ created_at: Date }>(
-    "INSERT INTO favorite (profile_id, media_ref_id) VALUES ($1, $2) ON CONFLICT (profile_id, media_ref_id) DO NOTHING RETURNING created_at",
-    [profileId, mediaRefId]
-  );
-  const media = await mediaRefById(db, mediaRefId);
-  if (inserted.rowCount === 1) {
-    return {
-      created: true,
-      favorite: { profileId, ...media, createdAt: iso(inserted.rows[0].created_at) }
-    };
-  }
-  const existing = await db.query<{ created_at: Date }>(
-    "SELECT created_at FROM favorite WHERE profile_id = $1 AND media_ref_id = $2",
-    [profileId, mediaRefId]
-  );
-  return {
-    created: false,
-    favorite: { profileId, ...media, createdAt: iso(existing.rows[0].created_at) }
-  };
-}
-
-export async function removeFavorite(
-  db: QueryExecutor,
-  profileId: string,
-  mediaRefId: string
-): Promise<{ removed: boolean }> {
-  const result = await db.query(
-    "DELETE FROM favorite WHERE profile_id = $1 AND media_ref_id = $2",
-    [profileId, mediaRefId]
-  );
-  return { removed: result.rowCount === 1 };
-}
-
-export async function listFavorites(db: QueryExecutor, profileId: string, limit: number): Promise<FavoriteView[]> {
-  const result = await db.query<{
-    media_ref_id: string;
-    source: string;
-    external_id: string;
-    created_at: Date;
-  }>(
-    `SELECT f.media_ref_id, m.source, m.external_id, f.created_at
-       FROM favorite f JOIN media_item_ref m ON m.id = f.media_ref_id
-      WHERE f.profile_id = $1
-      ORDER BY f.created_at, f.media_ref_id
-      LIMIT $2`,
-    [profileId, limit]
-  );
-  return result.rows.map((row) => ({
-    profileId,
-    mediaRefId: row.media_ref_id,
-    source: row.source,
-    externalId: row.external_id,
-    createdAt: iso(row.created_at)
-  }));
-}
-
-// ---- Watchlists ---------------------------------------------------------------
-
-const WATCHLIST_SUMMARY_SQL = `
-  SELECT w.id, w.profile_id, w.name, w.created_at, w.updated_at,
-         (SELECT count(*) FROM watchlist_item i WHERE i.watchlist_id = w.id) AS item_count
-    FROM watchlist w`;
-
-function mapWatchlistSummary(row: {
+export interface ProfileJson {
   id: string;
-  profile_id: string;
-  name: string;
+  displayName: string;
+  isActive: boolean;
+  preferences: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ProfileRow extends QueryResultRow {
+  id: string;
+  display_name: string;
+  is_active: boolean;
+  preferences: Record<string, unknown> | null;
   created_at: Date;
   updated_at: Date;
-  item_count: string;
-}): WatchlistSummary {
+}
+
+export function toProfileJson(row: ProfileRow): ProfileJson {
   return {
     id: row.id,
-    profileId: row.profile_id,
-    name: row.name,
-    itemCount: Number(row.item_count),
-    createdAt: iso(row.created_at),
-    updatedAt: iso(row.updated_at)
+    displayName: row.display_name,
+    isActive: row.is_active,
+    preferences: row.preferences ?? {},
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString()
   };
 }
 
-// Tolerant create: the unique (profile, lower(name)) index makes a repeated
-// create (double-tap, replay without a key) return the existing list.
-export async function createWatchlist(
-  db: QueryExecutor,
-  profileId: string,
-  name: string
-): Promise<{ watchlist: WatchlistSummary; created: boolean }> {
-  const result = await db.query<{ id: string }>(
-    "INSERT INTO watchlist (profile_id, name) VALUES ($1, $2) ON CONFLICT DO NOTHING RETURNING id",
-    [profileId, name]
-  );
-  const id =
-    result.rowCount === 1
-      ? result.rows[0].id
-      : (
-          await db.query<{ id: string }>(
-            "SELECT id FROM watchlist WHERE profile_id = $1 AND lower(name) = lower($2)",
-            [profileId, name]
-          )
-        ).rows[0].id;
-  const summary = await requireWatchlistSummary(db, id);
-  return { watchlist: summary, created: result.rowCount === 1 };
+export interface WatchStateJson {
+  profileId: string;
+  source: string;
+  externalId: string;
+  positionTicks: number;
+  durationTicks: number | null;
+  completed: boolean;
+  lastPlayedAt: string;
+  updatedAt: string;
 }
 
-async function requireWatchlistSummary(db: QueryExecutor, watchlistId: string): Promise<WatchlistSummary> {
-  const result = await db.query<Parameters<typeof mapWatchlistSummary>[0]>(
-    `${WATCHLIST_SUMMARY_SQL} WHERE w.id = $1`,
-    [watchlistId]
-  );
-  return mapWatchlistSummary(result.rows[0]);
+interface WatchStateRow extends QueryResultRow {
+  profile_id: string;
+  source: string;
+  external_id: string;
+  position_ticks: string | number;
+  duration_ticks: string | number | null;
+  completed: boolean;
+  last_played_at: Date;
+  updated_at: Date;
 }
 
-export async function listWatchlists(db: QueryExecutor, profileId: string): Promise<WatchlistSummary[]> {
-  const result = await db.query<Parameters<typeof mapWatchlistSummary>[0]>(
-    `${WATCHLIST_SUMMARY_SQL} WHERE w.profile_id = $1 ORDER BY w.created_at, w.id`,
+// bigint columns arrive as strings from pg; every value we write was already
+// validated <= Number.MAX_SAFE_INTEGER, so Number() is lossless here.
+export function ticksFromDb(value: string | number | null): number | null {
+  if (value === null) return null;
+  return typeof value === "number" ? value : Number(value);
+}
+
+export function toWatchStateJson(row: WatchStateRow): WatchStateJson {
+  return {
+    profileId: row.profile_id,
+    source: row.source,
+    externalId: row.external_id,
+    positionTicks: ticksFromDb(row.position_ticks) ?? 0,
+    durationTicks: ticksFromDb(row.duration_ticks),
+    completed: row.completed,
+    lastPlayedAt: row.last_played_at.toISOString(),
+    updatedAt: row.updated_at.toISOString()
+  };
+}
+
+export interface JellyfinLinkJson {
+  profileId: string;
+  jellyfinUserId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface LinkRow extends QueryResultRow {
+  profile_id: string;
+  jellyfin_user_id: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export function toJellyfinLinkJson(row: LinkRow): JellyfinLinkJson {
+  return {
+    profileId: row.profile_id,
+    jellyfinUserId: row.jellyfin_user_id,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString()
+  };
+}
+
+export interface SyncCursorJson {
+  job: string;
+  cursor: Record<string, unknown>;
+  lastStartedAt: string | null;
+  lastSucceededAt: string | null;
+  lastError: string | null;
+  updatedAt: string;
+}
+
+interface SyncCursorRow extends QueryResultRow {
+  job: string;
+  cursor: Record<string, unknown>;
+  last_started_at: Date | null;
+  last_succeeded_at: Date | null;
+  last_error: string | null;
+  updated_at: Date;
+}
+
+export function toSyncCursorJson(row: SyncCursorRow): SyncCursorJson {
+  return {
+    job: row.job,
+    cursor: row.cursor ?? {},
+    lastStartedAt: row.last_started_at?.toISOString() ?? null,
+    lastSucceededAt: row.last_succeeded_at?.toISOString() ?? null,
+    lastError: row.last_error,
+    updatedAt: row.updated_at.toISOString()
+  };
+}
+
+// Raises the classified categories the HTTP layer maps to responses; used
+// where the store itself knows better than the constraint (absent rows).
+export function storeProblemFromPgError(error: unknown): Error {
+  const classification = classifyPgError(error);
+  if (!classification) return error instanceof Error ? error : new Error(String(error));
+  const message = `household store rejected by database constraint (${describePgErrorKind(classification)})`;
+  switch (classification.kind) {
+    case "conflict":
+      return new HouseholdConflictError(message);
+    case "missing-reference":
+      return new HouseholdNotFoundError(message);
+    case "input":
+      return new HouseholdInputError(message);
+    case "storage":
+      return error instanceof Error ? error : new Error(String(error));
+  }
+}
+
+// ----------------------------------------------------------------- profiles
+
+export interface ListProfilesOptions {
+  includeInactive?: boolean;
+  limit: number;
+}
+
+export async function listProfiles(runner: SqlRunner, options: ListProfilesOptions): Promise<ProfileJson[]> {
+  const result = await runner.query<ProfileRow>(
+    `SELECT p.id, p.display_name, p.is_active, p.created_at, p.updated_at, pp.preferences
+       FROM household_profile p
+       LEFT JOIN profile_preferences pp ON pp.profile_id = p.id
+      WHERE $1 OR p.is_active
+      ORDER BY lower(p.display_name), p.id
+      LIMIT $2`,
+    [options.includeInactive === true, options.limit]
+  );
+  return result.rows.map(toProfileJson);
+}
+
+export interface CreateProfileInput {
+  displayName: string;
+  preferences?: Record<string, unknown>;
+}
+
+export async function createProfile(runner: SqlRunner, input: CreateProfileInput): Promise<ProfileJson> {
+  try {
+    const result = await runner.query<ProfileRow>(
+      `WITH new_profile AS (
+         INSERT INTO household_profile (display_name)
+         VALUES ($1)
+         RETURNING id, display_name, is_active, created_at, updated_at
+       ), new_preferences AS (
+         INSERT INTO profile_preferences (profile_id, preferences)
+         SELECT id, $2::jsonb FROM new_profile
+         RETURNING profile_id, preferences
+       )
+       SELECT np.*, npp.preferences
+         FROM new_profile np
+         LEFT JOIN new_preferences npp ON npp.profile_id = np.id`,
+      [input.displayName, JSON.stringify(input.preferences ?? {})]
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("household store: profile insert returned no row");
+    return toProfileJson(row);
+  } catch (error) {
+    throw storeProblemFromPgError(error);
+  }
+}
+
+export async function getProfile(runner: SqlRunner, profileId: string): Promise<ProfileJson | null> {
+  const result = await runner.query<ProfileRow>(
+    `SELECT p.id, p.display_name, p.is_active, p.created_at, p.updated_at, pp.preferences
+       FROM household_profile p
+       LEFT JOIN profile_preferences pp ON pp.profile_id = p.id
+      WHERE p.id = $1`,
     [profileId]
   );
-  return result.rows.map(mapWatchlistSummary);
+  const row = result.rows[0];
+  return row ? toProfileJson(row) : null;
 }
 
-// Isolation: profile_id in the WHERE clause makes a foreign watchlist look
-// exactly like a missing one.
-export async function getWatchlist(db: QueryExecutor, profileId: string, watchlistId: string): Promise<WatchlistDetail> {
-  const summary = await requireOwnedWatchlistSummary(db, profileId, watchlistId);
-  const items = await listOrderedItems(db, "watchlist_item", "watchlist_id", watchlistId);
-  return {
-    id: summary.id,
-    profileId: summary.profileId,
-    name: summary.name,
-    createdAt: summary.createdAt,
-    updatedAt: summary.updatedAt,
-    items
-  };
-}
-
-async function requireOwnedWatchlistSummary(
-  db: QueryExecutor,
+export async function updateProfile(
+  runner: SqlRunner,
   profileId: string,
-  watchlistId: string
-): Promise<WatchlistSummary> {
-  const result = await db.query<Parameters<typeof mapWatchlistSummary>[0]>(
-    `${WATCHLIST_SUMMARY_SQL} WHERE w.id = $1 AND w.profile_id = $2`,
-    [watchlistId, profileId]
-  );
-  if (result.rowCount === 0) throw new HouseholdError("watchlist_not_found", "Watchlist does not exist for this profile");
-  return mapWatchlistSummary(result.rows[0]);
-}
-
-export async function renameWatchlist(
-  db: QueryExecutor,
-  profileId: string,
-  watchlistId: string,
-  name: string
-): Promise<WatchlistDetail> {
-  await requireOwnedWatchlistSummary(db, profileId, watchlistId);
+  patch: { displayName?: string; isActive?: boolean }
+): Promise<ProfileJson | null> {
   try {
-    await db.query("UPDATE watchlist SET name = $1 WHERE id = $2", [name, watchlistId]);
+    const result = await runner.query<ProfileRow>(
+      `WITH updated AS (
+         UPDATE household_profile
+            SET display_name = COALESCE($2, display_name),
+                is_active    = COALESCE($3, is_active)
+          WHERE id = $1
+         RETURNING id, display_name, is_active, created_at, updated_at
+       )
+       SELECT u.*, pp.preferences
+         FROM updated u
+         LEFT JOIN profile_preferences pp ON pp.profile_id = u.id`,
+      [profileId, patch.displayName ?? null, patch.isActive ?? null]
+    );
+    const row = result.rows[0];
+    return row ? toProfileJson(row) : null;
   } catch (error) {
-    throw mapUniqueViolation(error, "duplicate_watchlist", "Another watchlist already has this name");
+    throw storeProblemFromPgError(error);
   }
-  return getWatchlist(db, profileId, watchlistId);
 }
 
-export async function deleteWatchlist(
-  db: QueryExecutor,
+/** True when the profile existed; deletion cascades to all owned state. */
+export async function deleteProfile(runner: SqlRunner, profileId: string): Promise<boolean> {
+  const result = await runner.query(
+    "DELETE FROM household_profile WHERE id = $1",
+    [profileId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+// -------------------------------------------------------------- preferences
+
+export async function replacePreferences(
+  runner: SqlRunner,
   profileId: string,
-  watchlistId: string
-): Promise<{ deleted: boolean }> {
-  const result = await db.query("DELETE FROM watchlist WHERE id = $1 AND profile_id = $2", [
-    watchlistId,
-    profileId
-  ]);
-  if (result.rowCount === 0) throw new HouseholdError("watchlist_not_found", "Watchlist does not exist for this profile");
-  return { deleted: true };
-}
-
-// ---- Ordered items (watchlist_item / collection_item share one shape) ---------
-
-const ITEM_VIEW_SQL = (table: string, ownerColumn: string) => `
-  SELECT i.media_ref_id, m.source, m.external_id, i.position, i.added_at
-    FROM ${table} i JOIN media_item_ref m ON m.id = i.media_ref_id
-   WHERE i.${ownerColumn} = $1
-   ORDER BY i.position, i.added_at, i.media_ref_id`;
-
-type ItemRow = { media_ref_id: string; source: string; external_id: string; position: number; added_at: Date };
-
-function mapItem(row: ItemRow): WatchlistItemView {
-  return {
-    mediaRefId: row.media_ref_id,
-    source: row.source,
-    externalId: row.external_id,
-    position: Number(row.position),
-    addedAt: iso(row.added_at)
-  };
-}
-
-async function listOrderedItems(
-  db: QueryExecutor,
-  table: PositionedTable["table"],
-  ownerColumn: PositionedTable["ownerColumn"],
-  ownerId: string
-): Promise<WatchlistItemView[]> {
-  const result = await db.query<ItemRow>(ITEM_VIEW_SQL(table, ownerColumn), [ownerId]);
-  return result.rows.map(mapItem);
-}
-
-// Table and column names are compile-time constants below — never user
-// input — so the interpolations are safe.
-export interface PositionedTable {
-  table: "watchlist_item" | "collection_item";
-  ownerColumn: "watchlist_id" | "collection_id";
-}
-
-export const WATCHLIST_ITEMS: PositionedTable = { table: "watchlist_item", ownerColumn: "watchlist_id" };
-export const COLLECTION_ITEMS: PositionedTable = { table: "collection_item", ownerColumn: "collection_id" };
-
-// Add-or-move one positioned item. Absent position = append (or no-op move
-// for an existing member); explicit position splices the neighbors so the
-// submitted order is the order readers see.
-export async function upsertPositionedItem(
-  db: QueryExecutor,
-  items: PositionedTable,
-  ownerId: string,
-  mediaRefId: string,
-  position: number | undefined
-): Promise<{ created: boolean; position: number }> {
-  const current = await db.query<{ position: number }>(
-    `SELECT position FROM ${items.table} WHERE ${items.ownerColumn} = $1 AND media_ref_id = $2`,
-    [ownerId, mediaRefId]
-  );
-  const maxResult = await db.query<{ max: number | null }>(
-    `SELECT max(position) AS max FROM ${items.table} WHERE ${items.ownerColumn} = $1`,
-    [ownerId]
-  );
-  const maxPosition = maxResult.rows[0].max === null ? 0 : Number(maxResult.rows[0].max);
-
-  // Existing member without an explicit position: replay/no-op.
-  if (current.rowCount === 1 && position === undefined) {
-    return { created: false, position: Number(current.rows[0].position) };
-  }
-
-  const target = position ?? maxPosition + 1;
-
-  if (current.rowCount === 1) {
-    const from = Number(current.rows[0].position);
-    if (from !== target) {
-      if (from < target) {
-        await db.query(
-          `UPDATE ${items.table} SET position = position - 1
-            WHERE ${items.ownerColumn} = $1 AND position > $2 AND position <= $3`,
-          [ownerId, from, target]
-        );
-      } else {
-        await db.query(
-          `UPDATE ${items.table} SET position = position + 1
-            WHERE ${items.ownerColumn} = $1 AND position >= $2 AND position < $3`,
-          [ownerId, target, from]
-        );
-      }
-      await db.query(
-        `UPDATE ${items.table} SET position = $1 WHERE ${items.ownerColumn} = $2 AND media_ref_id = $3`,
-        [target, ownerId, mediaRefId]
-      );
-    }
-    return { created: false, position: target };
-  }
-
-  if (position !== undefined && position <= maxPosition) {
-    await db.query(
-      `UPDATE ${items.table} SET position = position + 1
-        WHERE ${items.ownerColumn} = $1 AND position >= $2`,
-      [ownerId, position]
-    );
-  }
-  await db.query(
-    `INSERT INTO ${items.table} (${items.ownerColumn}, media_ref_id, position) VALUES ($1, $2, $3)`,
-    [ownerId, mediaRefId, target]
-  );
-  return { created: true, position: target };
-}
-
-export async function removePositionedItem(
-  db: QueryExecutor,
-  items: PositionedTable,
-  ownerId: string,
-  mediaRefId: string
-): Promise<{ removed: boolean }> {
-  const result = await db.query(
-    `DELETE FROM ${items.table} WHERE ${items.ownerColumn} = $1 AND media_ref_id = $2`,
-    [ownerId, mediaRefId]
-  );
-  return { removed: result.rowCount === 1 };
-}
-
-// Reorder is atomic and stale-proof: the submitted set must equal the
-// current membership set, else 409 stale_order_set. Positions are then
-// renumbered 1..n in the submitted order.
-export async function reorderPositionedItems(
-  db: QueryExecutor,
-  items: PositionedTable,
-  ownerId: string,
-  orderedMediaRefIds: string[]
-): Promise<WatchlistItemView[]> {
-  const current = await db.query<{ media_ref_id: string }>(
-    `SELECT media_ref_id FROM ${items.table} WHERE ${items.ownerColumn} = $1`,
-    [ownerId]
-  );
-  const currentIds = current.rows.map((row) => row.media_ref_id).sort();
-  const submittedIds = [...orderedMediaRefIds].sort();
-  const sameSet =
-    currentIds.length === submittedIds.length && currentIds.every((id, index) => id === submittedIds[index]);
-  if (!sameSet) {
-    throw new HouseholdError(
-      "stale_order_set",
-      "Submitted item set does not match the current membership; reload and retry",
-      `current=${currentIds.length} submitted=${submittedIds.length}`
-    );
-  }
-  for (let index = 0; index < orderedMediaRefIds.length; index++) {
-    await db.query(
-      `UPDATE ${items.table} SET position = $1 WHERE ${items.ownerColumn} = $2 AND media_ref_id = $3`,
-      [index + 1, ownerId, orderedMediaRefIds[index]]
-    );
-  }
-  return listOrderedItems(db, items.table, items.ownerColumn, ownerId);
-}
-
-// ---- Watchlist item operations (ownership-checked) -----------------------------
-
-export async function addWatchlistItem(
-  db: QueryExecutor,
-  profileId: string,
-  watchlistId: string,
-  mediaRefId: string,
-  position: number | undefined
-): Promise<{ item: WatchlistItemView; created: boolean }> {
-  const watchlist = await requireOwnedWatchlistSummary(db, profileId, watchlistId);
-  const result = await upsertPositionedItem(db, WATCHLIST_ITEMS, watchlist.id, mediaRefId, position);
-  const items = await listOrderedItems(db, WATCHLIST_ITEMS.table, WATCHLIST_ITEMS.ownerColumn, watchlist.id);
-  const item = items.find((entry) => entry.mediaRefId === mediaRefId);
-  if (!item) throw new HouseholdError("idempotency_state_invalid", "Item vanished during write"); // unreachable
-  return { item, created: result.created };
-}
-
-export async function removeWatchlistItem(
-  db: QueryExecutor,
-  profileId: string,
-  watchlistId: string,
-  mediaRefId: string
-): Promise<{ removed: boolean }> {
-  const watchlist = await requireOwnedWatchlistSummary(db, profileId, watchlistId);
-  return removePositionedItem(db, WATCHLIST_ITEMS, watchlist.id, mediaRefId);
-}
-
-export async function reorderWatchlistItems(
-  db: QueryExecutor,
-  profileId: string,
-  watchlistId: string,
-  orderedMediaRefIds: string[]
-): Promise<WatchlistItemView[]> {
-  const watchlist = await requireOwnedWatchlistSummary(db, profileId, watchlistId);
-  return reorderPositionedItems(db, WATCHLIST_ITEMS, watchlist.id, orderedMediaRefIds);
-}
-
-// ---- Collections (household-level curation) ------------------------------------
-
-const COLLECTION_SUMMARY_SQL = `
-  SELECT c.id, c.name, c.description, c.created_by_profile_id, c.created_at, c.updated_at,
-         (SELECT count(*) FROM collection_item i WHERE i.collection_id = c.id) AS item_count
-    FROM collection c`;
-
-function mapCollectionSummary(row: {
-  id: string;
-  name: string;
-  description: string;
-  created_by_profile_id: string | null;
-  created_at: Date;
-  updated_at: Date;
-  item_count: string;
-}): CollectionSummary {
-  return {
-    id: row.id,
-    name: row.name,
-    description: row.description,
-    itemCount: Number(row.item_count),
-    createdByProfileId: row.created_by_profile_id,
-    createdAt: iso(row.created_at),
-    updatedAt: iso(row.updated_at)
-  };
-}
-
-async function requireCollectionSummary(db: QueryExecutor, collectionId: string): Promise<CollectionSummary> {
-  const result = await db.query<Parameters<typeof mapCollectionSummary>[0]>(
-    `${COLLECTION_SUMMARY_SQL} WHERE c.id = $1`,
-    [collectionId]
-  );
-  if (result.rowCount === 0) throw new HouseholdError("collection_not_found", "Collection does not exist");
-  return mapCollectionSummary(result.rows[0]);
-}
-
-export async function createCollection(
-  db: QueryExecutor,
-  input: { name: string; description?: string; createdByProfileId?: string }
-): Promise<{ collection: CollectionSummary; created: boolean }> {
-  const result = await db.query<{ id: string }>(
-    "INSERT INTO collection (name, description, created_by_profile_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING id",
-    [input.name, input.description ?? "", input.createdByProfileId ?? null]
-  );
-  const id =
-    result.rowCount === 1
-      ? result.rows[0].id
-      : (await db.query<{ id: string }>("SELECT id FROM collection WHERE lower(name) = lower($1)", [input.name]))
-          .rows[0].id;
-  return { collection: await requireCollectionSummary(db, id), created: result.rowCount === 1 };
-}
-
-export async function listCollections(db: QueryExecutor): Promise<CollectionSummary[]> {
-  const result = await db.query<Parameters<typeof mapCollectionSummary>[0]>(
-    `${COLLECTION_SUMMARY_SQL} ORDER BY c.created_at, c.id`
-  );
-  return result.rows.map(mapCollectionSummary);
-}
-
-export async function getCollection(db: QueryExecutor, collectionId: string): Promise<CollectionDetail> {
-  const summary = await requireCollectionSummary(db, collectionId);
-  const items = await listOrderedItems(db, COLLECTION_ITEMS.table, COLLECTION_ITEMS.ownerColumn, summary.id);
-  return {
-    id: summary.id,
-    name: summary.name,
-    description: summary.description,
-    createdByProfileId: summary.createdByProfileId,
-    createdAt: summary.createdAt,
-    updatedAt: summary.updatedAt,
-    items
-  };
-}
-
-// Strict rename: the id was addressed explicitly, so a name collision is a
-// real conflict (unlike create, which tolerates repeats).
-export async function updateCollection(
-  db: QueryExecutor,
-  collectionId: string,
-  input: { name?: string; description?: string }
-): Promise<CollectionDetail> {
-  await requireCollectionSummary(db, collectionId);
-  const current = await db.query<{ name: string; description: string }>(
-    "SELECT name, description FROM collection WHERE id = $1",
-    [collectionId]
-  );
-  const name = input.name ?? current.rows[0].name;
-  const description = input.description ?? current.rows[0].description;
+  preferences: Record<string, unknown>
+): Promise<ProfileJson | null> {
   try {
-    await db.query("UPDATE collection SET name = $1, description = $2 WHERE id = $3", [name, description, collectionId]);
-  } catch (error) {
-    throw mapUniqueViolation(error, "duplicate_collection", "Another collection already has this name");
-  }
-  return getCollection(db, collectionId);
-}
-
-// Cascades collection items; home rows sourced from the collection cascade
-// too (RH-0003 design: a home row may not dangle).
-export async function deleteCollection(db: QueryExecutor, collectionId: string): Promise<{ deleted: boolean }> {
-  const result = await db.query("DELETE FROM collection WHERE id = $1", [collectionId]);
-  if (result.rowCount === 0) throw new HouseholdError("collection_not_found", "Collection does not exist");
-  return { deleted: true };
-}
-
-export async function addCollectionItem(
-  db: QueryExecutor,
-  collectionId: string,
-  mediaRefId: string,
-  position: number | undefined
-): Promise<{ item: WatchlistItemView; created: boolean }> {
-  await requireCollectionSummary(db, collectionId);
-  const result = await upsertPositionedItem(db, COLLECTION_ITEMS, collectionId, mediaRefId, position);
-  const items = await listOrderedItems(db, COLLECTION_ITEMS.table, COLLECTION_ITEMS.ownerColumn, collectionId);
-  const item = items.find((entry) => entry.mediaRefId === mediaRefId);
-  if (!item) throw new HouseholdError("idempotency_state_invalid", "Item vanished during write"); // unreachable
-  return { item, created: result.created };
-}
-
-export async function removeCollectionItem(
-  db: QueryExecutor,
-  collectionId: string,
-  mediaRefId: string
-): Promise<{ removed: boolean }> {
-  return removePositionedItem(db, COLLECTION_ITEMS, collectionId, mediaRefId);
-}
-
-export async function reorderCollectionItems(
-  db: QueryExecutor,
-  collectionId: string,
-  orderedMediaRefIds: string[]
-): Promise<WatchlistItemView[]> {
-  await requireCollectionSummary(db, collectionId);
-  return reorderPositionedItems(db, COLLECTION_ITEMS, collectionId, orderedMediaRefIds);
-}
-
-// ---- Home rows ------------------------------------------------------------------
-
-function mapHomeRow(row: {
-  id: string;
-  row_key: string;
-  title: string;
-  source_kind: string;
-  source_key: string | null;
-  collection_id: string | null;
-  position: number;
-  is_enabled: boolean;
-  created_at: Date;
-  updated_at: Date;
-}): HomeRowView {
-  return {
-    id: row.id,
-    rowKey: row.row_key,
-    title: row.title,
-    sourceKind: row.source_kind,
-    sourceKey: row.source_key,
-    collectionId: row.collection_id,
-    position: Number(row.position),
-    isEnabled: row.is_enabled,
-    createdAt: iso(row.created_at),
-    updatedAt: iso(row.updated_at)
-  };
-}
-
-const HOME_ROW_SQL = `
-  SELECT id, row_key, title, source_kind, source_key, collection_id, position, is_enabled, created_at, updated_at
-    FROM home_row`;
-
-export async function listHomeRows(db: QueryExecutor): Promise<HomeRowView[]> {
-  const result = await db.query<Parameters<typeof mapHomeRow>[0]>(`${HOME_ROW_SQL} ORDER BY position, id`, []);
-  return result.rows.map(mapHomeRow);
-}
-
-// A collection-sourced row requires a live collection (the FK alone would
-// create it, but the 404 must fire before the write so the client learns
-// which part of the payload was stale).
-async function requireCollectionForSource(db: QueryExecutor, source: ValidatedHomeRowSource): Promise<void> {
-  if (source.kind === "collection") await requireCollectionSummary(db, source.collectionId);
-}
-
-function sourceParams(source: ValidatedHomeRowSource): { sourceKind: string; sourceKey: string | null; collectionId: string | null } {
-  return source.kind === "collection"
-    ? { sourceKind: "collection", sourceKey: null, collectionId: source.collectionId }
-    : { sourceKind: "jellyfin_section", sourceKey: source.sourceKey, collectionId: null };
-}
-
-export async function createHomeRow(
-  db: QueryExecutor,
-  input: {
-    rowKey: string;
-    title: string;
-    source: ValidatedHomeRowSource;
-    position?: number;
-  }
-): Promise<{ row: HomeRowView; created: boolean }> {
-  await requireCollectionForSource(db, input.source);
-  const { sourceKind, sourceKey, collectionId } = sourceParams(input.source);
-  // Absent position appends; an explicit position splices (rows at or after
-  // it shift up first so the target slot is vacated).
-  const next = await db.query<{ next: number }>(
-    "SELECT COALESCE(max(position), 0) + 1 AS next FROM home_row",
-    []
-  );
-  const target = input.position ?? Number(next.rows[0].next);
-  if (input.position !== undefined && input.position <= Number(next.rows[0].next) - 1) {
-    await db.query("UPDATE home_row SET position = position + 1 WHERE position >= $1", [target]);
-  }
-  const inserted = await db.query<{ id: string }>(
-    `INSERT INTO home_row (row_key, title, source_kind, source_key, collection_id, position)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (row_key) DO NOTHING RETURNING id`,
-    [input.rowKey, input.title, sourceKind, sourceKey, collectionId, target]
-  );
-  if (inserted.rowCount === 1) {
-    return { row: await requireHomeRow(db, inserted.rows[0].id), created: true };
-  }
-  // Lost the row_key race (or a replay): surface the existing row untouched.
-  const existing = await db.query<{ id: string }>("SELECT id FROM home_row WHERE row_key = $1", [input.rowKey]);
-  return { row: await requireHomeRow(db, existing.rows[0].id), created: false };
-}
-
-export async function requireHomeRow(db: QueryExecutor, rowId: string): Promise<HomeRowView> {
-  const result = await db.query<Parameters<typeof mapHomeRow>[0]>(`${HOME_ROW_SQL} WHERE id = $1`, [rowId]);
-  if (result.rowCount === 0) throw new HouseholdError("home_row_not_found", "Home row does not exist");
-  return mapHomeRow(result.rows[0]);
-}
-
-export async function updateHomeRow(
-  db: QueryExecutor,
-  rowId: string,
-  input: { title?: string; isEnabled?: boolean; source?: ValidatedHomeRowSource }
-): Promise<HomeRowView> {
-  const current = await requireHomeRow(db, rowId);
-  const source = input.source ?? sourceFromRow(current);
-  await requireCollectionForSource(db, source);
-  const { sourceKind, sourceKey, collectionId } = sourceParams(source);
-  await db.query(
-    `UPDATE home_row
-        SET title = $1, is_enabled = $2, source_kind = $3, source_key = $4, collection_id = $5
-      WHERE id = $6`,
-    [input.title ?? current.title, input.isEnabled ?? current.isEnabled, sourceKind, sourceKey, collectionId, rowId]
-  );
-  return requireHomeRow(db, rowId);
-}
-
-function sourceFromRow(row: HomeRowView): ValidatedHomeRowSource {
-  return row.sourceKind === "collection"
-    ? { kind: "collection", collectionId: row.collectionId ?? "" }
-    : { kind: "jellyfin_section", sourceKey: row.sourceKey ?? "" };
-}
-
-export async function deleteHomeRow(db: QueryExecutor, rowId: string): Promise<{ deleted: boolean }> {
-  const result = await db.query("DELETE FROM home_row WHERE id = $1", [rowId]);
-  if (result.rowCount === 0) throw new HouseholdError("home_row_not_found", "Home row does not exist");
-  return { deleted: true };
-}
-
-export async function reorderHomeRows(db: QueryExecutor, orderedRowIds: string[]): Promise<HomeRowView[]> {
-  const current = await db.query<{ id: string }>("SELECT id FROM home_row", []);
-  const currentIds = current.rows.map((row) => row.id).sort();
-  const submittedIds = [...orderedRowIds].sort();
-  const sameSet =
-    currentIds.length === submittedIds.length && currentIds.every((id, index) => id === submittedIds[index]);
-  if (!sameSet) {
-    throw new HouseholdError(
-      "stale_order_set",
-      "Submitted row set does not match the current home rows; reload and retry",
-      `current=${currentIds.length} submitted=${submittedIds.length}`
+    const result = await runner.query<ProfileRow>(
+      `WITH upserted AS (
+         INSERT INTO profile_preferences (profile_id, preferences)
+         VALUES ($1, $2::jsonb)
+         ON CONFLICT (profile_id) DO UPDATE
+            SET preferences = EXCLUDED.preferences
+         RETURNING profile_id, preferences
+       )
+       SELECT p.id, p.display_name, p.is_active, p.created_at, p.updated_at, up.preferences
+         FROM upserted up
+         JOIN household_profile p ON p.id = up.profile_id`,
+      [profileId, JSON.stringify(preferences)]
     );
+    const row = result.rows[0];
+    return row ? toProfileJson(row) : null;
+  } catch (error) {
+    throw storeProblemFromPgError(error);
   }
-  for (let index = 0; index < orderedRowIds.length; index++) {
-    await db.query("UPDATE home_row SET position = $1 WHERE id = $2", [index + 1, orderedRowIds[index]]);
-  }
-  return listHomeRows(db);
 }
 
-// ---- Helpers ----------------------------------------------------------------
+// ------------------------------------------------------------ jellyfin link
 
-// Translates driver-level unique violations that the model layer could not
-// pre-detect (races between CHECK and write) into household errors.
-function mapUniqueViolation(error: unknown, code: "duplicate_watchlist" | "duplicate_collection" | "home_row_not_found", message: string): HouseholdError {
-  const pgError = error as { code?: string } | null;
-  if (pgError && typeof pgError === "object" && pgError.code === "23505") {
-    return new HouseholdError(code, message);
+export async function getJellyfinLink(runner: SqlRunner, profileId: string): Promise<JellyfinLinkJson | null> {
+  const result = await runner.query<LinkRow>(
+    `SELECT profile_id, jellyfin_user_id, created_at, updated_at
+       FROM jellyfin_account_link
+      WHERE profile_id = $1`,
+    [profileId]
+  );
+  const row = result.rows[0];
+  return row ? toJellyfinLinkJson(row) : null;
+}
+
+export async function putJellyfinLink(
+  runner: SqlRunner,
+  profileId: string,
+  jellyfinUserId: string
+): Promise<JellyfinLinkJson> {
+  try {
+    const result = await runner.query<LinkRow>(
+      `INSERT INTO jellyfin_account_link (profile_id, jellyfin_user_id)
+       VALUES ($1, $2)
+       ON CONFLICT (profile_id) DO UPDATE
+          SET jellyfin_user_id = EXCLUDED.jellyfin_user_id
+       RETURNING profile_id, jellyfin_user_id, created_at, updated_at`,
+      [profileId, jellyfinUserId]
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("household store: jellyfin link upsert returned no row");
+    return toJellyfinLinkJson(row);
+  } catch (error) {
+    throw storeProblemFromPgError(error);
   }
-  throw error;
+}
+
+export async function deleteJellyfinLink(runner: SqlRunner, profileId: string): Promise<boolean> {
+  const result = await runner.query(
+    "DELETE FROM jellyfin_account_link WHERE profile_id = $1",
+    [profileId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+// ------------------------------------------------------------- media refs
+
+// The stable bridge: (source, external_id) in, ReelHouse uuid out. Creation
+// is idempotent and race-safe (the UNIQUE pair is the authority); a lost
+// insert re-reads the winner's id.
+export async function resolveMediaRef(runner: SqlRunner, source: string, externalId: string): Promise<string> {
+  const existing = await runner.query<{ id: string }>(
+    "SELECT id FROM media_item_ref WHERE source = $1 AND external_id = $2",
+    [source, externalId]
+  );
+  const found = existing.rows[0];
+  if (found) return found.id;
+
+  const inserted = await runner.query<{ id: string }>(
+    `INSERT INTO media_item_ref (source, external_id)
+     VALUES ($1, $2)
+     ON CONFLICT (source, external_id) DO NOTHING
+     RETURNING id`,
+    [source, externalId]
+  );
+  const created = inserted.rows[0];
+  if (created) return created.id;
+
+  const winner = await runner.query<{ id: string }>(
+    "SELECT id FROM media_item_ref WHERE source = $1 AND external_id = $2",
+    [source, externalId]
+  );
+  const raced = winner.rows[0];
+  if (!raced) throw new Error("household store: media_item_ref resolution failed without a database error");
+  return raced.id;
+}
+
+// ------------------------------------------------------------- watch state
+
+export interface WatchProgressRecord {
+  profileId: string;
+  source: "jellyfin";
+  externalId: string;
+  positionTicks: number;
+  durationTicks?: number;
+  completed: boolean;
+}
+
+// Atomic progress write, inside the caller's transaction: resolve the stable
+// media ref, upsert the overlay row, and append the history event. playback_event
+// is append-only by design — corrections rewrite watch_state, never history.
+export async function recordWatchProgress(tx: SqlRunner, input: WatchProgressRecord): Promise<WatchStateJson> {
+  try {
+    const mediaRefId = await resolveMediaRef(tx, input.source, input.externalId);
+    const result = await tx.query<WatchStateRow>(
+      `INSERT INTO watch_state (profile_id, media_ref_id, position_ticks, duration_ticks, completed, last_played_at)
+       VALUES ($1, $2, $3, $4, $5, now())
+       ON CONFLICT (profile_id, media_ref_id) DO UPDATE
+          SET position_ticks = EXCLUDED.position_ticks,
+              duration_ticks = EXCLUDED.duration_ticks,
+              completed      = EXCLUDED.completed,
+              last_played_at = now()
+       RETURNING profile_id, position_ticks, duration_ticks, completed, last_played_at, updated_at,
+                 (SELECT source FROM media_item_ref WHERE id = $2) AS source,
+                 (SELECT external_id FROM media_item_ref WHERE id = $2) AS external_id`,
+      [
+        input.profileId,
+        mediaRefId,
+        input.positionTicks,
+        input.durationTicks ?? null,
+        input.completed
+      ]
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("household store: watch state upsert returned no row");
+
+    await tx.query(
+      `INSERT INTO playback_event (profile_id, media_ref_id, position_ticks, duration_ticks, completed, recorded_by)
+       VALUES ($1, $2, $3, $4, $5, 'reelhouse')`,
+      [input.profileId, mediaRefId, input.positionTicks, input.durationTicks ?? null, input.completed]
+    );
+    return toWatchStateJson(row);
+  } catch (error) {
+    throw storeProblemFromPgError(error);
+  }
+}
+
+export async function getWatchState(
+  runner: SqlRunner,
+  profileId: string,
+  source: string,
+  externalId: string
+): Promise<WatchStateJson | null> {
+  const result = await runner.query<WatchStateRow>(
+    `SELECT ws.profile_id, r.source, r.external_id, ws.position_ticks, ws.duration_ticks,
+            ws.completed, ws.last_played_at, ws.updated_at
+       FROM watch_state ws
+       JOIN media_item_ref r ON r.id = ws.media_ref_id
+      WHERE ws.profile_id = $1 AND r.source = $2 AND r.external_id = $3`,
+    [profileId, source, externalId]
+  );
+  const row = result.rows[0];
+  return row ? toWatchStateJson(row) : null;
+}
+
+export interface ListWatchOptions {
+  limit: number;
+}
+
+// Everything this profile has state for, newest activity first.
+export async function listWatchState(
+  runner: SqlRunner,
+  profileId: string,
+  options: ListWatchOptions
+): Promise<WatchStateJson[]> {
+  const result = await runner.query<WatchStateRow>(
+    `SELECT ws.profile_id, r.source, r.external_id, ws.position_ticks, ws.duration_ticks,
+            ws.completed, ws.last_played_at, ws.updated_at
+       FROM watch_state ws
+       JOIN media_item_ref r ON r.id = ws.media_ref_id
+      WHERE ws.profile_id = $1
+      ORDER BY ws.last_played_at DESC
+      LIMIT $2`,
+    [profileId, options.limit]
+  );
+  return result.rows.map(toWatchStateJson);
+}
+
+// The Continue Watching query — deliberately the exact shape of the
+// watch_state_resume_idx partial index (completed = false AND position > 0),
+// newest activity first, bounded by the caller's limit.
+export async function listContinueWatching(
+  runner: SqlRunner,
+  profileId: string,
+  options: ListWatchOptions
+): Promise<WatchStateJson[]> {
+  const result = await runner.query<WatchStateRow>(
+    `SELECT ws.profile_id, r.source, r.external_id, ws.position_ticks, ws.duration_ticks,
+            ws.completed, ws.last_played_at, ws.updated_at
+       FROM watch_state ws
+       JOIN media_item_ref r ON r.id = ws.media_ref_id
+      WHERE ws.profile_id = $1
+        AND ws.completed = false
+        AND ws.position_ticks > 0
+      ORDER BY ws.last_played_at DESC
+      LIMIT $2`,
+    [profileId, options.limit]
+  );
+  return result.rows.map(toWatchStateJson);
+}
+
+// ----------------------------------------------------------- sync metadata
+
+const SYNC_ERROR_MAX_CHARS = 2000;
+
+export function truncateSyncError(message: string): string {
+  return message.length <= SYNC_ERROR_MAX_CHARS ? message : `${message.slice(0, SYNC_ERROR_MAX_CHARS)}…`;
+}
+
+export interface SyncCursorUpdate {
+  job: string;
+  cursor?: Record<string, unknown>;
+}
+
+// Upserts the job row and stamps started. An explicit cursor replaces the
+// stored one; an absent one preserves it (a runner that does not know the
+// position must not erase the previous run's). The newest run owns the answer.
+export async function markSyncStarted(
+  runner: SqlRunner,
+  update: SyncCursorUpdate,
+  at: Date
+): Promise<SyncCursorJson> {
+  try {
+    const result = await runner.query<SyncCursorRow>(
+      `INSERT INTO sync_cursor (job, cursor, last_started_at)
+       VALUES ($1, COALESCE($2::jsonb, '{}'::jsonb), $3)
+       ON CONFLICT (job) DO UPDATE
+          SET cursor = COALESCE($2::jsonb, sync_cursor.cursor),
+              last_started_at = $3
+       RETURNING job, cursor, last_started_at, last_succeeded_at, last_error, updated_at`,
+      [update.job, update.cursor ? JSON.stringify(update.cursor) : null, at]
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("household store: sync cursor upsert returned no row");
+    return toSyncCursorJson(row);
+  } catch (error) {
+    throw storeProblemFromPgError(error);
+  }
+}
+
+export async function markSyncSucceeded(
+  runner: SqlRunner,
+  job: string,
+  at: Date,
+  cursor?: Record<string, unknown>
+): Promise<SyncCursorJson | null> {
+  try {
+    const result = await runner.query<SyncCursorRow>(
+      `UPDATE sync_cursor
+          SET last_succeeded_at = $2,
+              last_error = NULL
+              ${cursor ? ", cursor = $3::jsonb" : ""}
+        WHERE job = $1
+       RETURNING job, cursor, last_started_at, last_succeeded_at, last_error, updated_at`,
+      cursor ? [job, at, JSON.stringify(cursor)] : [job, at]
+    );
+    const row = result.rows[0];
+    return row ? toSyncCursorJson(row) : null;
+  } catch (error) {
+    throw storeProblemFromPgError(error);
+  }
+}
+
+// Failures never clear last_succeeded_at: the cursor keeps telling the truth
+// about the last good run while carrying the bounded error that explains the
+// latest one. Only a registered job (one that marked itself started) can be
+// marked failed; there is no cursor row to heal otherwise.
+export async function markSyncFailed(
+  runner: SqlRunner,
+  job: string,
+  message: string
+): Promise<SyncCursorJson | null> {
+  try {
+    const result = await runner.query<SyncCursorRow>(
+      `UPDATE sync_cursor
+          SET last_error = $2
+        WHERE job = $1
+       RETURNING job, cursor, last_started_at, last_succeeded_at, last_error, updated_at`,
+      [job, truncateSyncError(message)]
+    );
+    const row = result.rows[0];
+    return row ? toSyncCursorJson(row) : null;
+  } catch (error) {
+    throw storeProblemFromPgError(error);
+  }
+}
+
+// ------------------------------------------------------- idempotency keys
+
+export const WATCH_PROGRESS_IDEMPOTENCY_SCOPE = "watch_progress";
+
+export type IdempotencyClaim = "claimed" | { replay: true };
+
+// Inserts-or-loses: the UNIQUE (scope, key) pair decides. A replay with the
+// same fingerprint returns { replay: true } so the caller can skip the
+// non-idempotent part of the write (the history append); a replay with a
+// different fingerprint under the same key is a client bug and conflicts.
+export async function claimIdempotencyKey(
+  runner: SqlRunner,
+  scope: string,
+  key: string,
+  fingerprint: string | undefined
+): Promise<IdempotencyClaim> {
+  try {
+    const insert = await runner.query<{ id: string }>(
+      `INSERT INTO idempotency_record (scope, idempotency_key, fingerprint)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (scope, idempotency_key) DO NOTHING
+       RETURNING id`,
+      [scope, key, fingerprint ?? null]
+    );
+    if ((insert.rowCount ?? 0) > 0) return "claimed";
+
+    const existing = await runner.query<{ fingerprint: string | null }>(
+      "SELECT fingerprint FROM idempotency_record WHERE scope = $1 AND idempotency_key = $2",
+      [scope, key]
+    );
+    const row = existing.rows[0];
+    if (!row) throw new Error("household store: idempotency claim vanished between insert and select");
+    if ((row.fingerprint ?? null) === (fingerprint ?? null)) return { replay: true };
+    throw new HouseholdConflictError("idempotency key was already used for a different request");
+  } catch (error) {
+    if (error instanceof HouseholdConflictError) throw error;
+    throw storeProblemFromPgError(error);
+  }
+}
+
+// Canonical fingerprint over the semantic input (the canonical key order of
+// the parsed object is the construction order, which the parser fixes), so a
+// replayed request with reformatted whitespace still counts as the same write.
+export function fingerprintWatchProgress(input: WatchProgressRecord): string {
+  const canonical = JSON.stringify({
+    completed: input.completed,
+    durationTicks: input.durationTicks ?? null,
+    externalId: input.externalId,
+    positionTicks: input.positionTicks,
+    source: input.source
+  });
+  return createHash("sha256").update(canonical).digest("hex");
 }

@@ -7,7 +7,7 @@ import {
   addCollectionItem,
   removeCollectionItem,
   reorderCollectionItems
-} from "@/lib/household/store";
+} from "@/lib/household/lists";
 import {
   fingerprintRequest,
   parseMediaRef,
@@ -40,7 +40,7 @@ export const POST = householdHandler(async (request: NextRequest, context: Route
     key: readIdempotencyKey(request),
     fingerprint: fingerprintRequest("collections.items.add", { id, media, position: position ?? null }),
     apply: async (db) => {
-      const mediaRefId = await resolveMediaRef(db, media);
+      const mediaRefId = await resolveMediaRef(db, media.source, media.externalId);
       const { item, created } = await addCollectionItem(db, id, mediaRefId, position);
       return { status: created ? 201 : 200, body: { created, item } };
     }

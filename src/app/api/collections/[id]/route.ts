@@ -1,8 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getPool } from "@/lib/db/pool";
 import { householdHandler, parseJsonBody, readIdempotencyKey, runMutation } from "@/lib/household/http";
-import { HouseholdError } from "@/lib/household/errors";
-import { getCollection, updateCollection, deleteCollection } from "@/lib/household/store";
+import { HouseholdInputError } from "@/lib/household/errors";
+import { getCollection, updateCollection, deleteCollection } from "@/lib/household/lists";
 import { fingerprintRequest, parseName, parseOptionalDescription, parseUuid } from "@/lib/household/model";
 
 export const dynamic = "force-dynamic";
@@ -29,7 +29,7 @@ export const PATCH = householdHandler(async (request: NextRequest, context: Rout
   const name = body.name === undefined ? undefined : parseName(body.name, "name");
   const description = parseOptionalDescription(body.description, "description");
   if (name === undefined && description === undefined) {
-    throw new HouseholdError("validation_failed", "Provide at least one of: name, description");
+    throw new HouseholdInputError( "Provide at least one of: name, description");
   }
   return runMutation(getPool(), {
     scope: "collections.update",

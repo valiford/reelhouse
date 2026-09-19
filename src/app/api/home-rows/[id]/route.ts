@@ -1,8 +1,8 @@
 import type { NextRequest } from "next/server";
 import { getPool } from "@/lib/db/pool";
 import { householdHandler, parseJsonBody, readIdempotencyKey, runMutation } from "@/lib/household/http";
-import { HouseholdError } from "@/lib/household/errors";
-import { updateHomeRow, deleteHomeRow } from "@/lib/household/store";
+import { HouseholdInputError } from "@/lib/household/errors";
+import { updateHomeRow, deleteHomeRow } from "@/lib/household/lists";
 import {
   fingerprintRequest,
   parseHomeRowSource,
@@ -30,7 +30,7 @@ export const PATCH = householdHandler(async (request: NextRequest, context: Rout
   const isEnabled = parseOptionalBoolean(body.isEnabled, "isEnabled");
   const source = body.source === undefined ? undefined : parseHomeRowSource(body.source, "source");
   if (title === undefined && isEnabled === undefined && source === undefined) {
-    throw new HouseholdError("validation_failed", "Provide at least one of: title, isEnabled, source");
+    throw new HouseholdInputError( "Provide at least one of: title, isEnabled, source");
   }
   return runMutation(getPool(), {
     scope: "home_rows.update",

@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getPool } from "@/lib/db/pool";
 import { householdHandler, parseJsonBody, readIdempotencyKey, runMutation } from "@/lib/household/http";
-import { requireProfile, createWatchlist, listWatchlists } from "@/lib/household/store";
+import { requireProfile, createWatchlist, listWatchlists } from "@/lib/household/lists";
 import { fingerprintRequest, parseName, parseUuid, requireFields } from "@/lib/household/model";
 
 export const dynamic = "force-dynamic";

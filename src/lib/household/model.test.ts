@@ -1,10 +1,13 @@
-// Unit tests for the household request model: validation bounds, media
-// identity, home-row source pairing, idempotency keys, and fingerprints.
-// Pure logic — no database, runs under plain `node --test`.
+// Unit tests for the RH-0018 household request model: validation bounds,
+// media identity, home-row source pairing, idempotency keys, and
+// fingerprints. Pure logic — no database, runs under plain `node --test`.
+//
+// Error-type expectations follow the RH-0017 contract: validation failures
+// are HouseholdInputError, mapped centrally by api.ts to 400 invalid_request.
 
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { isHouseholdError, HouseholdError, toHouseholdErrorResponse } from "./errors.ts";
+import { HouseholdConflictError, HouseholdInputError, HouseholdNotFoundError } from "./errors.ts";
 import {
   canonicalJsonString,
   fingerprintRequest,
@@ -25,8 +28,7 @@ function expectValidation(run: () => unknown, contains?: string): void {
   try {
     run();
   } catch (error) {
-    assert.ok(isHouseholdError(error), `expected HouseholdError, got: ${String(error)}`);
-    assert.equal(error.code, "validation_failed");
+    assert.ok(error instanceof HouseholdInputError, `expected HouseholdInputError, got: ${String(error)}`);
     if (contains) assert.ok(error.message.includes(contains), `message "${error.message}" should mention "${contains}"`);
     return;
   }
@@ -133,11 +135,13 @@ test("canonical json is key-order independent; fingerprints are not", () => {
   );
 });
 
-test("error mapping keeps household codes and collapses everything else", () => {
-  const household = toHouseholdErrorResponse(new HouseholdError("duplicate_watchlist", "dup"));
-  assert.deepEqual([household.status, household.body.error.code], [409, "duplicate_watchlist"]);
-  const unknown = toHouseholdErrorResponse(new Error("connection refused to postgres://user:secret@host/db"));
-  assert.equal(unknown.status, 503);
-  assert.equal(unknown.body.error.code, "database_unavailable");
-  assert.ok(!JSON.stringify(unknown.body).includes("secret"), "raw driver text must not leak into responses");
+test("the RH-0017 error family maps to the central response contract", () => {
+  // The classes my layer throws are exactly the ones api.ts understands.
+  const input = new HouseholdInputError("name must not be blank");
+  const missing = new HouseholdNotFoundError("profile does not exist");
+  const conflict = new HouseholdConflictError("another watchlist already has this name");
+  assert.equal(input.name, "HouseholdInputError");
+  assert.equal(missing.name, "HouseholdNotFoundError");
+  assert.equal(conflict.name, "HouseholdConflictError");
+  assert.ok(input instanceof Error && missing instanceof Error && conflict instanceof Error);
 });

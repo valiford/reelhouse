@@ -1,19 +1,18 @@
-// Route plumbing shared by the household API routes (RH-0018).
+// Route plumbing shared by the RH-0018 household list/home-row API routes.
 //
 // Server-side only by usage: every import chain reaches pool.ts, whose
 // `server-only` marker keeps this out of the browser bundle. Handlers are
-// wrapped so that ANY escape maps to a bounded, redacted error response
-// (HouseholdError keeps its code; anything else is 503 with a generic
-// message and the concrete error logged server-side only).
+// wrapped so that ANY escape funnels through RH-0017's single error exit
+// (householdErrorResponse): typed store errors map to their category,
+// PostgreSQL violations classify through classifyPgError(), and anything
+// else fails closed with a redacted, truncated log-only message.
 
 import { NextResponse, type NextRequest } from "next/server";
 import type { Pool } from "pg";
-import { redactError } from "../db/config.ts";
-import { isHouseholdError, toHouseholdErrorResponse } from "./errors.ts";
+import { householdErrorResponse, readBoundedJson } from "./api.ts";
+import { HouseholdInputError } from "./errors.ts";
 import { IDEMPOTENCY_KEY_HEADER, IDEMPOTENCY_REPLAY_HEADER, runIdempotentMutation } from "./idempotency.ts";
-import { parseIdempotencyKey, parseJsonObject } from "./model.ts";
-
-const LOG_DETAIL_CAP = 2000;
+import { parseIdempotencyKey } from "./model.ts";
 
 export function householdHandler<Context>(
   handler: (request: NextRequest, context: Context) => Promise<NextResponse>
@@ -22,12 +21,7 @@ export function householdHandler<Context>(
     try {
       return await handler(request, context);
     } catch (error) {
-      if (!isHouseholdError(error)) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error("ReelHouse household API error:", redactError(message, process.env.DATABASE_URL).slice(0, LOG_DETAIL_CAP));
-      }
-      const { status, body } = toHouseholdErrorResponse(error);
-      return NextResponse.json(body, { status });
+      return householdErrorResponse(error);
     }
   };
 }
@@ -36,8 +30,14 @@ export function readIdempotencyKey(request: NextRequest): string | undefined {
   return parseIdempotencyKey(request.headers.get(IDEMPOTENCY_KEY_HEADER));
 }
 
+// Bounded body read (RH-0017's hard cap) plus the object-shape requirement
+// every RH-0018 payload has.
 export async function parseJsonBody(request: NextRequest): Promise<Record<string, unknown>> {
-  return parseJsonObject(await request.text());
+  const parsed = await readBoundedJson(request);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new HouseholdInputError("request body must be a JSON object");
+  }
+  return parsed as Record<string, unknown>;
 }
 
 // Runs one idempotent mutation against the pool and renders its response,

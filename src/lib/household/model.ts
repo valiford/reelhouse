@@ -12,7 +12,7 @@
 // bodies capped at 64 KiB.
 
 import { createHash } from "node:crypto";
-import { HouseholdError } from "./errors.ts";
+import { HouseholdInputError } from "./errors.ts";
 
 export const MAX_BODY_CHARS = 65_536;
 export const MAX_NAME_CHARS = 200;
@@ -42,8 +42,8 @@ const ROW_KEY_PATTERN = /^[a-z0-9_]+$/;
 // not leading/trailing whitespace (trimmed first).
 const IDEMPOTENCY_KEY_PATTERN = /^[!-~][ -~]*[!-~]$/;
 
-function validationError(message: string): HouseholdError {
-  return new HouseholdError("validation_failed", message);
+function validationError(message: string): HouseholdInputError {
+  return new HouseholdInputError(message);
 }
 
 export function isUuid(value: unknown): value is string {

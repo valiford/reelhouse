@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getPool } from "@/lib/db/pool";
 import { householdHandler, parseJsonBody, readIdempotencyKey, runMutation } from "@/lib/household/http";
-import { requireProfile, listFavorites, addFavorite, removeFavorite, requireMediaRef, resolveMediaRef } from "@/lib/household/store";
+import { requireProfile, listFavorites, addFavorite, removeFavorite, requireMediaRef, resolveMediaRef } from "@/lib/household/lists";
 import {
   fingerprintRequest,
   parseLimit,
@@ -35,7 +35,7 @@ export const POST = householdHandler(async (request: NextRequest) => {
     key: readIdempotencyKey(request),
     fingerprint: fingerprintRequest("favorites.add", { profileId, media }),
     apply: async (db) => {
-      const mediaRefId = await resolveMediaRef(db, media);
+      const mediaRefId = await resolveMediaRef(db, media.source, media.externalId);
       const { favorite, created } = await addFavorite(db, profileId, mediaRefId);
       return { status: created ? 201 : 200, body: { created, favorite } };
     }

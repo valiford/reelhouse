@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getPool } from "@/lib/db/pool";
 import { householdHandler, parseJsonBody, readIdempotencyKey, runMutation } from "@/lib/household/http";
-import { requireProfile, createCollection, listCollections } from "@/lib/household/store";
+import { requireProfile, createCollection, listCollections } from "@/lib/household/lists";
 import {
   fingerprintRequest,
   parseName,

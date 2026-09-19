@@ -1,561 +1,613 @@
-// Integration tests for household persistence (RH-0018) against the
-// disposable PostgreSQL 18 instance (same lifecycle as the other suites).
+// Integration tests for ReelHouse-owned household state persistence
+// (RH-0017) against the disposable PostgreSQL 18 instance.
 //
 //   npm run test:db:up      start the disposable database (docker compose)
 //   npm run test:db         run all integration suites (this one included)
 //   npm run test:db:down    stop and discard the database
 //
-// Covers the acceptance paths: durable writes across connections, natural
-// idempotency (duplicate creates/favorites), idempotency-key replay and
-// fingerprint reuse, stale reorder detection, profile isolation, profile
-// deletion cascades, home-row source pairing, and transactional recovery
-// (a failed mutation leaves nothing behind). Jellyfin is never contacted:
-// media identity is (source, external_id) data only.
+// Like the smoke and catalog suites, this suite drives its own database
+// (reelhouse_household_test) inside the shared disposable container, created
+// on demand with the reelhouse migrations applied fresh, so it never fights
+// the other suites and never touches the production Synology target.
 
 import { strict as assert } from "node:assert";
-import { after, beforeEach, describe, it } from "node:test";
+import { before, after, describe, it } from "node:test";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Pool } from "pg";
+import { Client, Pool } from "pg";
 import {
-  addFavorite,
-  addCollectionItem,
-  addWatchlistItem,
-  createCollection,
-  createHomeRow,
-  createWatchlist,
-  deleteCollection,
-  deleteHomeRow,
-  deleteWatchlist,
-  getCollection,
-  getWatchlist,
-  listCollections,
-  listFavorites,
-  listHomeRows,
-  listWatchlists,
-  removeFavorite,
-  removeWatchlistItem,
-  renameWatchlist,
-  reorderCollectionItems,
-  reorderHomeRows,
-  reorderWatchlistItems,
-  requireHomeRow,
-  requireMediaRef,
-  requireProfile,
+  HouseholdConflictError,
+  HouseholdInputError,
+  HouseholdNotFoundError
+} from "./errors.ts";
+import {
+  WATCH_PROGRESS_IDEMPOTENCY_SCOPE,
+  claimIdempotencyKey,
+  createProfile,
+  deleteJellyfinLink,
+  deleteProfile,
+  fingerprintWatchProgress,
+  getJellyfinLink,
+  getProfile,
+  getWatchState,
+  listContinueWatching,
+  listProfiles,
+  listWatchState,
+  markSyncFailed,
+  markSyncStarted,
+  markSyncSucceeded,
+  putJellyfinLink,
+  recordWatchProgress,
+  replacePreferences,
   resolveMediaRef,
-  updateCollection,
-  updateHomeRow,
-  withTransaction,
-  type QueryExecutor
+  transact,
+  updateProfile
 } from "./store.ts";
-import { runIdempotentMutation } from "./idempotency.ts";
-import { isHouseholdError } from "./errors.ts";
-import { parseName } from "./model.ts";
 import { runMigrations } from "../db/migrator.ts";
 
-// This suite drives its OWN database (reelhouse_household_test) inside the
-// disposable container, created on demand — same pattern as the catalog
-// suite — so the migration suite's schema resets can never race it.
+const ADMIN_DATABASE_URL =
+  process.env.TEST_DATABASE_URL ?? "postgresql://reelhouse_test:reelhouse_test@127.0.0.1:55433/reelhouse_test";
+
 const HOUSEHOLD_DATABASE_URL =
   process.env.HOUSEHOLD_TEST_DATABASE_URL ??
   "postgresql://reelhouse_test:reelhouse_test@127.0.0.1:55433/reelhouse_household_test";
 
-const ADMIN_DATABASE_URL = "postgresql://reelhouse_test:reelhouse_test@127.0.0.1:55433/reelhouse_test";
-
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "db", "migrations");
 
-const MEDIA_A = { source: "jellyfin" as const, externalId: "jf-item-a" };
-const MEDIA_B = { source: "jellyfin" as const, externalId: "jf-item-b" };
-const MEDIA_C = { source: "jellyfin" as const, externalId: "jf-item-c" };
-const MEDIA_D = { source: "jellyfin" as const, externalId: "jf-item-d" };
+// The disposable credential pair must never appear in any failure output.
+const SECRET_PAIR = "reelhouse_test:reelhouse_test";
 
-const pool: Pool = new Pool({ connectionString: HOUSEHOLD_DATABASE_URL, max: 4 });
-let profileA: string;
-let profileB: string;
-
-function expectHouseholdError(code: string): (error: unknown) => void {
-  return (error: unknown) => {
-    assert.ok(isHouseholdError(error), `expected HouseholdError, got: ${String(error)}`);
-    assert.equal(error.code, code, `expected code ${code}, got ${error.code}: ${error.message}`);
-  };
-}
-
-async function rejectsWith(code: string, run: () => Promise<unknown>): Promise<void> {
-  try {
-    await run();
-  } catch (error) {
-    expectHouseholdError(code)(error);
-    return;
+function assertNoSecret(error: unknown): void {
+  if (error instanceof Error && error.message.includes(SECRET_PAIR)) {
+    throw new Error("a store error leaked the disposable credential pair");
   }
-  assert.fail(`expected HouseholdError ${code} but the call succeeded`);
 }
 
-async function freshProfile(name: string): Promise<string> {
-  const result = await pool.query<{ id: string }>(
-    "INSERT INTO household_profile (display_name) VALUES ($1) RETURNING id",
-    [name]
-  );
-  return result.rows[0].id;
-}
-
-beforeEach(async () => {
-  // Deterministic per-test state: clear household data (schema stays).
-  await pool.query("TRUNCATE home_row, collection, watchlist, favorite, household_profile, idempotency_record CASCADE");
-  profileA = await freshProfile("Ava");
-  profileB = await freshProfile("Ben");
-});
-
-// Wrap pool.query as the QueryExecutor the store accepts.
-const db: QueryExecutor = pool;
-
-after(async () => {
-  await pool.end();
-});
-
-// Verify reachability + create/migrate the suite database before anything runs.
-await (async () => {
-  const admin = new Pool({ connectionString: ADMIN_DATABASE_URL, max: 1 });
+async function withClient<T>(databaseUrl: string, fn: (client: Client) => Promise<T>): Promise<T> {
+  const client = new Client({ connectionString: databaseUrl });
   try {
-    await admin.query("SELECT 1");
-  } catch {
-    throw new Error(
-      "Disposable PostgreSQL 18 is not reachable. Start it with: npm run test:db:up " +
-        "(or point HOUSEHOLD_TEST_DATABASE_URL at an expendable PostgreSQL 18 database)."
-    );
-  } finally {
-    await admin.end();
-  }
-  const exists = await withAdmin(async (client) => {
-    const result = await client.query("SELECT 1 FROM pg_database WHERE datname = $1", ["reelhouse_household_test"]);
-    return result.rowCount !== 0;
-  });
-  if (!exists) await withAdmin((client) => client.query("CREATE DATABASE reelhouse_household_test"));
-  await runMigrations({ databaseUrl: HOUSEHOLD_DATABASE_URL, migrationsDir: MIGRATIONS_DIR, log: () => {} });
-})();
-
-async function withAdmin<T>(fn: (client: import("pg").PoolClient) => Promise<T>): Promise<T> {
-  const admin = new Pool({ connectionString: ADMIN_DATABASE_URL, max: 1 });
-  const client = await admin.connect();
-  try {
+    await client.connect();
     return await fn(client);
   } finally {
-    client.release();
-    await admin.end();
+    await client.end();
   }
 }
 
-describe("profiles and media identity", () => {
-  it("fails closed on unknown profiles", async () => {
-    await rejectsWith("profile_not_found", () => requireProfile(db, "0f0e8c4a-7b1e-4d3e-9f2a-1b2c3d4e5f99"));
+let pool: Pool;
+
+before(async () => {
+  await withClient(ADMIN_DATABASE_URL, async (client) => {
+    const exists = await client.query("SELECT 1 FROM pg_database WHERE datname = $1", ["reelhouse_household_test"]);
+    if (exists.rowCount === 0) await client.query("CREATE DATABASE reelhouse_household_test");
   });
 
-  it("resolves media refs idempotently and requires them on read", async () => {
-    const first = await resolveMediaRef(db, MEDIA_A);
-    const second = await resolveMediaRef(db, MEDIA_A);
-    assert.equal(first, second);
-    assert.equal(await requireMediaRef(db, MEDIA_A), first);
-    await rejectsWith("media_ref_not_found", () => requireMediaRef(db, { source: "jellyfin", externalId: "never-seen" }));
+  await withClient(HOUSEHOLD_DATABASE_URL, async (client) => {
+    await client.query("DROP SCHEMA public CASCADE");
+    await client.query("CREATE SCHEMA public");
   });
+  await runMigrations({ databaseUrl: HOUSEHOLD_DATABASE_URL, migrationsDir: MIGRATIONS_DIR, log: () => {} });
+
+  pool = new Pool({ connectionString: HOUSEHOLD_DATABASE_URL, max: 2 });
 });
 
-describe("favorites", () => {
-  it("adds once, tolerates duplicates, lists deterministically, and removes", async () => {
-    const first = await addFavorite(db, profileA, await resolveMediaRef(db, MEDIA_A));
-    assert.equal(first.created, true);
-    const duplicate = await addFavorite(db, profileA, await resolveMediaRef(db, MEDIA_A));
-    assert.equal(duplicate.created, false);
-    assert.equal(duplicate.favorite.createdAt, first.favorite.createdAt);
-
-    await addFavorite(db, profileA, await resolveMediaRef(db, MEDIA_B));
-    await addFavorite(db, profileA, await resolveMediaRef(db, MEDIA_C));
-    const favorites = await listFavorites(db, profileA, 200);
-    assert.deepEqual(
-      favorites.map((favorite) => favorite.externalId),
-      ["jf-item-a", "jf-item-b", "jf-item-c"]
-    );
-
-    const removed = await removeFavorite(db, profileA, await requireMediaRef(db, MEDIA_B));
-    assert.equal(removed.removed, true);
-    const removedAgain = await removeFavorite(db, profileA, await requireMediaRef(db, MEDIA_B));
-    assert.equal(removedAgain.removed, false);
-    assert.equal((await listFavorites(db, profileA, 200)).length, 2);
-  });
-
-  it("isolates favorites per profile", async () => {
-    await addFavorite(db, profileA, await resolveMediaRef(db, MEDIA_A));
-    assert.deepEqual(await listFavorites(db, profileB, 200), []);
-    await addFavorite(db, profileB, await resolveMediaRef(db, MEDIA_A));
-    const both = await pool.query("SELECT count(*) AS n FROM favorite");
-    assert.equal(Number(both.rows[0].n), 2, "same media under two profiles is two favorites");
-  });
-
-  it("cascades when the profile is deleted", async () => {
-    await addFavorite(db, profileA, await resolveMediaRef(db, MEDIA_A));
-    await pool.query("DELETE FROM household_profile WHERE id = $1", [profileA]);
-    const remaining = await pool.query("SELECT count(*) AS n FROM favorite");
-    assert.equal(Number(remaining.rows[0].n), 0);
-  });
+after(async () => {
+  if (pool) await pool.end();
 });
 
-describe("watchlists", () => {
-  it("creates tolerantly on duplicate names (case-insensitive), lists and renames", async () => {
-    const first = await createWatchlist(db, profileA, "Weekend Picks");
-    assert.equal(first.created, true);
-    // The API layer normalizes names before they reach the store; mirror it.
-    const duplicate = await createWatchlist(db, profileA, parseName("  weekend picks ", "name"));
-    assert.equal(duplicate.created, false);
-    assert.equal(duplicate.watchlist.id, first.watchlist.id);
-
-    await createWatchlist(db, profileA, "Docs");
-    const lists = await listWatchlists(db, profileA);
-    assert.deepEqual(lists.map((list) => list.name), ["Weekend Picks", "Docs"]);
-    assert.deepEqual(await listWatchlists(db, profileB), []);
-
-    await renameWatchlist(db, profileA, first.watchlist.id, "Saturday Picks");
-    const renamed = await getWatchlist(db, profileA, first.watchlist.id);
-    assert.equal(renamed.name, "Saturday Picks");
-    await rejectsWith("duplicate_watchlist", () => renameWatchlist(db, profileA, first.watchlist.id, "DOCS"));
-  });
-
-  it("hides another profile's watchlist behind the same 404", async () => {
-    const { watchlist } = await createWatchlist(db, profileA, "Mine");
-    await rejectsWith("watchlist_not_found", () => getWatchlist(db, profileB, watchlist.id));
-    await rejectsWith("watchlist_not_found", () => deleteWatchlist(db, profileB, watchlist.id));
-    await rejectsWith("watchlist_not_found", () => renameWatchlist(db, profileB, watchlist.id, "Hijack"));
-  });
-
-  it("adds, moves, and removes items with splice positions", async () => {
-    const { watchlist } = await createWatchlist(db, profileA, "Splice");
-    const a = await resolveMediaRef(db, MEDIA_A);
-    const b = await resolveMediaRef(db, MEDIA_B);
-    const c = await resolveMediaRef(db, MEDIA_C);
-    const d = await resolveMediaRef(db, MEDIA_D);
-
-    await addWatchlistItem(db, profileA, watchlist.id, a, undefined);
-    await addWatchlistItem(db, profileA, watchlist.id, b, undefined);
-    await addWatchlistItem(db, profileA, watchlist.id, c, undefined);
-    // Duplicate add without position: no-op that reports the current slot.
-    const noOp = await addWatchlistItem(db, profileA, watchlist.id, a, undefined);
-    assert.equal(noOp.created, false);
-    assert.equal(noOp.item.position, 1);
-
-    // Insert at the front splices the rest down.
-    const front = await addWatchlistItem(db, profileA, watchlist.id, d, 1);
-    assert.equal(front.created, true);
-    assert.equal(front.item.position, 1);
-    let view = await getWatchlist(db, profileA, watchlist.id);
-    assert.deepEqual(
-      view.items.map((item) => [item.externalId, item.position]),
-      [
-        ["jf-item-d", 1],
-        ["jf-item-a", 2],
-        ["jf-item-b", 3],
-        ["jf-item-c", 4]
-      ]
+async function resetTables(): Promise<void> {
+  await withClient(HOUSEHOLD_DATABASE_URL, async (client) => {
+    await client.query(
+      "TRUNCATE household_profile, media_item_ref, sync_cursor, idempotency_record CASCADE"
     );
+  });
+}
 
-    // Moving within the list keeps a single stable order.
-    await addWatchlistItem(db, profileA, watchlist.id, d, 3);
-    view = await getWatchlist(db, profileA, watchlist.id);
-    assert.deepEqual(
-      view.items.map((item) => item.externalId),
-      ["jf-item-a", "jf-item-b", "jf-item-d", "jf-item-c"]
-    );
+async function scalar(client: Client, text: string, params?: unknown[]): Promise<unknown> {
+  const result = await client.query(text, params);
+  const row = result.rows[0] as Record<string, unknown> | undefined;
+  if (!row) return undefined;
+  const value = Object.values(row)[0];
+  // bigint counts arrive as strings; coerce numeric strings for strict equals.
+  return typeof value === "string" && /^-?\d+$/.test(value) ? Number(value) : value;
+}
 
-    const removed = await removeWatchlistItem(db, profileA, watchlist.id, b);
-    assert.equal(removed.removed, true);
-    const removedAgain = await removeWatchlistItem(db, profileA, watchlist.id, b);
-    assert.equal(removedAgain.removed, false);
+describe("household profiles", () => {
+  it("creates a profile with empty preferences and lists it", async () => {
+    await resetTables();
+    const created = await createProfile(pool, { displayName: "Vali" });
+    assert.match(created.id, /^[0-9a-f-]{36}$/);
+    assert.equal(created.displayName, "Vali");
+    assert.equal(created.isActive, true);
+    assert.deepEqual(created.preferences, {});
+
+    const listed = await listProfiles(pool, { limit: 100 });
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0]?.id, created.id);
+
+    const withInactive = await listProfiles(pool, { includeInactive: true, limit: 100 });
+    assert.equal(withInactive.length, 1);
   });
 
-  it("reorders atomically and rejects stale sets", async () => {
-    const { watchlist } = await createWatchlist(db, profileA, "Reorder");
-    const ids: string[] = [];
-    for (const media of [MEDIA_A, MEDIA_B, MEDIA_C]) ids.push(await resolveMediaRef(db, media));
-    // Membership first: reorder renumbers existing members, it never adds.
-    for (const id of ids) await addWatchlistItem(db, profileA, watchlist.id, id, undefined);
-
-    const reordered = await reorderWatchlistItems(db, profileA, watchlist.id, [ids[2], ids[0], ids[1]]);
-    assert.deepEqual(
-      reordered.map((item) => [item.externalId, item.position]),
-      [
-        ["jf-item-c", 1],
-        ["jf-item-a", 2],
-        ["jf-item-b", 3]
-      ]
+  it("refuses duplicate names case-insensitively with a conflict", async () => {
+    await resetTables();
+    await createProfile(pool, { displayName: "Vali" });
+    await assert.rejects(
+      createProfile(pool, { displayName: "vali" }),
+      (error: unknown) => {
+        assertNoSecret(error);
+        return error instanceof HouseholdConflictError;
+      }
     );
-
-    // Missing member and extra member are both stale (and a duplicate
-    // submission cannot even reach the store without failing the set check).
-    await rejectsWith("stale_order_set", () => reorderWatchlistItems(db, profileA, watchlist.id, [ids[0], ids[1]]));
-    await rejectsWith("stale_order_set", () =>
-      reorderWatchlistItems(db, profileA, watchlist.id, [ids[0], ids[1], ids[2], ids[0]])
-    );
-    const view = await getWatchlist(db, profileA, watchlist.id);
-    assert.equal(view.items.length, 3, "a rejected reorder must not mutate membership");
+    const listed = await listProfiles(pool, { limit: 100 });
+    assert.equal(listed.length, 1);
   });
 
-  it("deletes with its items", async () => {
-    const { watchlist } = await createWatchlist(db, profileA, "Doomed");
-    await addWatchlistItem(db, profileA, watchlist.id, await resolveMediaRef(db, MEDIA_A), undefined);
-    await deleteWatchlist(db, profileA, watchlist.id);
-    const items = await pool.query("SELECT count(*) AS n FROM watchlist_item");
-    assert.equal(Number(items.rows[0].n), 0);
-    await rejectsWith("watchlist_not_found", () => getWatchlist(db, profileA, watchlist.id));
-  });
-});
-
-describe("collections", () => {
-  it("creates household collections with creator provenance and unique names", async () => {
-    const first = await createCollection(db, {
-      name: "Rainy Sunday",
-      description: "Slow cinema for wet afternoons",
-      createdByProfileId: profileA
+  it("creates a profile with initial preferences atomically", async () => {
+    await resetTables();
+    const created = await createProfile(pool, {
+      displayName: "Nicole",
+      preferences: { theme: "dark", autoplay: true }
     });
-    assert.equal(first.created, true);
-    const duplicate = await createCollection(db, { name: "rainy sunday", createdByProfileId: profileB });
-    assert.equal(duplicate.created, false);
-    assert.equal(duplicate.collection.id, first.collection.id);
-    assert.equal(first.collection.createdByProfileId, profileA);
+    assert.deepEqual(created.preferences, { theme: "dark", autoplay: true });
 
-    const all = await listCollections(db);
+    const fetched = await getProfile(pool, created.id);
+    assert.ok(fetched);
+    assert.deepEqual(fetched?.preferences, { theme: "dark", autoplay: true });
+  });
+
+  it("renames, deactivates, hides from the default list, and is found with includeInactive", async () => {
+    await resetTables();
+    const created = await createProfile(pool, { displayName: "Temporary" });
+
+    const renamed = await updateProfile(pool, created.id, { displayName: "Renamed", isActive: false });
+    assert.ok(renamed);
+    assert.equal(renamed?.displayName, "Renamed");
+    assert.equal(renamed?.isActive, false);
+
+    const visible = await listProfiles(pool, { limit: 100 });
+    assert.equal(visible.length, 0);
+    const all = await listProfiles(pool, { includeInactive: true, limit: 100 });
     assert.equal(all.length, 1);
-    assert.equal(all[0].itemCount, 0);
-
-    const updated = await updateCollection(db, first.collection.id, { description: "Updated" });
-    assert.equal(updated.description, "Updated");
-    // Renaming to your own name is a no-op success; renaming onto ANOTHER
-    // collection's name is the strict conflict.
-    await updateCollection(db, first.collection.id, { name: "Rainy Sunday" });
-    const other = await createCollection(db, { name: "Other Shelf" });
-    await rejectsWith("duplicate_collection", () =>
-      updateCollection(db, first.collection.id, { name: "other shelf" })
-    );
-    assert.notEqual(other.collection.id, first.collection.id);
   });
 
-  it("manages membership with the same positioned semantics", async () => {
-    const { collection } = await createCollection(db, { name: "Membership" });
-    const a = await resolveMediaRef(db, MEDIA_A);
-    const b = await resolveMediaRef(db, MEDIA_B);
-    await addCollectionItem(db, collection.id, a, undefined);
-    await addCollectionItem(db, collection.id, b, 1);
-    let view = await getCollection(db, collection.id);
-    assert.deepEqual(
-      view.items.map((item) => item.externalId),
-      ["jf-item-b", "jf-item-a"]
-    );
-    await rejectsWith("stale_order_set", () => reorderCollectionItems(db, collection.id, [a]));
+  it("conflicts when renaming onto an existing name and returns null for unknown updates", async () => {
+    await resetTables();
+    const first = await createProfile(pool, { displayName: "Vali" });
+    await createProfile(pool, { displayName: "Nicole" });
 
-    view = await getCollection(db, collection.id);
-    assert.equal(view.items.length, 2);
+    await assert.rejects(
+      updateProfile(pool, first.id, { displayName: "nicole" }),
+      HouseholdConflictError
+    );
+    const missing = await updateProfile(pool, "00000000-0000-0000-0000-000000000001", { isActive: false });
+    assert.equal(missing, null);
   });
 
-  it("cascades membership and collection-sourced home rows on delete", async () => {
-    const { collection } = await createCollection(db, { name: "Doomed Collection" });
-    await addCollectionItem(db, collection.id, await resolveMediaRef(db, MEDIA_A), undefined);
-    const { row } = await createHomeRow(db, {
-      rowKey: "collection_row",
-      title: "From Collection",
-      source: { kind: "collection", collectionId: collection.id }
+  it("deletes a profile and cascades every owned row", async () => {
+    await resetTables();
+    const created = await createProfile(pool, { displayName: "Doomed" });
+    await putJellyfinLink(pool, created.id, "jf-user-1");
+    await transact(pool, (tx) =>
+      recordWatchProgress(tx, {
+        profileId: created.id,
+        source: "jellyfin",
+        externalId: "movie-1",
+        positionTicks: 300,
+        completed: false
+      })
+    );
+
+    const deleted = await deleteProfile(pool, created.id);
+    assert.equal(deleted, true);
+    assert.equal(await getProfile(pool, created.id), null);
+
+    await withClient(HOUSEHOLD_DATABASE_URL, async (client) => {
+      assert.equal(await scalar(client, "SELECT count(*) FROM profile_preferences"), 0);
+      assert.equal(await scalar(client, "SELECT count(*) FROM jellyfin_account_link"), 0);
+      assert.equal(await scalar(client, "SELECT count(*) FROM watch_state"), 0);
+      assert.equal(await scalar(client, "SELECT count(*) FROM playback_event"), 0);
     });
-    await deleteCollection(db, collection.id);
-    assert.equal(Number((await pool.query("SELECT count(*) AS n FROM collection_item")).rows[0].n), 0);
-    await rejectsWith("home_row_not_found", () => requireHomeRow(db, row.id));
+
+    assert.equal(await deleteProfile(pool, created.id), false);
   });
 });
 
-describe("home rows", () => {
-  it("creates with unique keys, splices positions, updates and deletes", async () => {
-    const first = await createHomeRow(db, {
-      rowKey: "continue_watching",
-      title: "Continue Watching",
-      source: { kind: "jellyfin_section", sourceKey: "jf-section-1" }
-    });
-    assert.equal(first.created, true);
-    const duplicate = await createHomeRow(db, {
-      rowKey: "continue_watching",
-      title: "Different Title",
-      source: { kind: "jellyfin_section", sourceKey: "jf-section-2" }
-    });
-    assert.equal(duplicate.created, false);
-    assert.equal(duplicate.row.id, first.row.id);
-    assert.equal(duplicate.row.title, "Continue Watching", "duplicate create never overwrites");
+describe("profile preferences", () => {
+  it("replaces the whole object and reports missing profiles", async () => {
+    await resetTables();
+    const created = await createProfile(pool, { displayName: "Vali", preferences: { a: 1 } });
 
-    await createHomeRow(db, {
-      rowKey: "recently_added",
-      title: "Recently Added",
-      source: { kind: "jellyfin_section", sourceKey: "jf-section-1" }
-    });
-    const front = await createHomeRow(db, {
-      rowKey: "movie_night",
-      title: "Movie Night",
-      source: { kind: "jellyfin_section", sourceKey: "jf-section-3" },
-      position: 1
-    });
-    assert.equal(front.created, true);
-    let rows = await listHomeRows(db);
-    assert.deepEqual(
-      rows.map((row) => [row.rowKey, row.position]),
-      [
-        ["movie_night", 1],
-        ["continue_watching", 2],
-        ["recently_added", 3]
-      ]
-    );
+    const replaced = await replacePreferences(pool, created.id, { b: { c: [1, 2] }, keep: false });
+    assert.ok(replaced);
+    assert.deepEqual(replaced?.preferences, { b: { c: [1, 2] }, keep: false });
 
-    const updated = await updateHomeRow(db, front.row.id, { isEnabled: false });
-    assert.equal(updated.isEnabled, false);
-    assert.equal(updated.rowKey, "movie_night");
+    const again = await replacePreferences(pool, created.id, {});
+    assert.ok(again);
+    assert.deepEqual(again?.preferences, {});
 
-    await deleteHomeRow(db, front.row.id);
-    rows = await listHomeRows(db);
-    assert.equal(rows.length, 2);
-    await rejectsWith("home_row_not_found", () => deleteHomeRow(db, front.row.id));
-  });
-
-  it("requires an existing collection for collection sources", async () => {
-    await rejectsWith("collection_not_found", () =>
-      createHomeRow(db, {
-        rowKey: "ghost_collection",
-        title: "Ghost",
-        source: { kind: "collection", collectionId: "0f0e8c4a-7b1e-4d3e-9f2a-1b2c3d4e5f61" }
-      })
+    // A missing profile surfaces as not-found (the FK is the authority).
+    await assert.rejects(
+      replacePreferences(pool, "00000000-0000-0000-0000-000000000002", {}),
+      HouseholdNotFoundError
     );
   });
 
-  it("reorders as a full permutation or rejects as stale", async () => {
-    const one = await createHomeRow(db, { rowKey: "row_one", title: "One", source: { kind: "jellyfin_section", sourceKey: "s1" } });
-    const two = await createHomeRow(db, { rowKey: "row_two", title: "Two", source: { kind: "jellyfin_section", sourceKey: "s1" } });
-    const three = await createHomeRow(db, { rowKey: "row_three", title: "Three", source: { kind: "jellyfin_section", sourceKey: "s1" } });
-
-    const reordered = await reorderHomeRows(db, [three.row.id, one.row.id, two.row.id]);
-    assert.deepEqual(
-      reordered.map((row) => [row.rowKey, row.position]),
-      [
-        ["row_three", 1],
-        ["row_one", 2],
-        ["row_two", 3]
-      ]
-    );
-    await rejectsWith("stale_order_set", () => reorderHomeRows(db, [one.row.id, two.row.id]));
-    const after = await listHomeRows(db);
-    assert.deepEqual(
-      after.map((row) => row.position),
-      [1, 2, 3],
-      "a rejected reorder must not corrupt positions"
+  it("rejects non-object preferences at the database even if a caller bypasses validation", async () => {
+    await resetTables();
+    const created = await createProfile(pool, { displayName: "Vali" });
+    await assert.rejects(
+      withClient(HOUSEHOLD_DATABASE_URL, async (client) =>
+        client.query("UPDATE profile_preferences SET preferences = $1::jsonb WHERE profile_id = $2", [
+          JSON.stringify([1, 2]),
+          created.id
+        ])
+      ),
+      (error: unknown) => {
+        assertNoSecret(error);
+        return typeof error === "object" && error !== null && (error as { code?: string }).code === "23514";
+      }
     );
   });
 });
 
-describe("idempotent mutations", () => {
-  it("stores the original response and replays it byte-for-byte", async () => {
-    const fingerprint = "fp-replay";
-    const first = await runIdempotentMutation(pool, {
-      scope: "favorites.add",
-      key: "client-key-1",
-      fingerprint,
-      apply: async (tx) => {
-        const mediaRefId = await resolveMediaRef(tx, MEDIA_A);
-        const { favorite, created } = await addFavorite(tx, profileA, mediaRefId);
-        return { status: created ? 201 : 200, body: { created, favorite } };
-      }
-    });
-    assert.equal(first.replayed, false);
-    assert.equal(first.status, 201);
-
-    const replay = await runIdempotentMutation(pool, {
-      scope: "favorites.add",
-      key: "client-key-1",
-      fingerprint,
-      apply: async () => {
-        throw new Error("replay must not re-execute the mutation");
-      }
-    });
-    assert.equal(replay.replayed, true);
-    assert.equal(replay.status, first.status, "replay must serve the original status");
-    assert.deepEqual(replay.body, first.body, "replay must serve the original body");
-
-    // Exactly one favorite row exists despite two executions of the flow.
-    assert.equal(Number((await pool.query("SELECT count(*) AS n FROM favorite")).rows[0].n), 1);
+describe("media item refs and the jellyfin account link", () => {
+  it("resolves (source, external_id) to one stable id across repeat calls", async () => {
+    await resetTables();
+    const first = await resolveMediaRef(pool, "jellyfin", "episode-42");
+    const second = await resolveMediaRef(pool, "jellyfin", "episode-42");
+    assert.equal(first, second);
+    const other = await resolveMediaRef(pool, "jellyfin", "episode-43");
+    assert.notEqual(first, other);
   });
 
-  it("rejects key reuse with a different fingerprint", async () => {
-    await runIdempotentMutation(pool, {
-      scope: "favorites.add",
-      key: "client-key-2",
-      fingerprint: "fp-original",
-      apply: async (tx) => {
-        const mediaRefId = await resolveMediaRef(tx, MEDIA_A);
-        await addFavorite(tx, profileA, mediaRefId);
-        return { status: 201, body: { created: true } };
-      }
-    });
-    await rejectsWith("idempotency_key_reuse", () =>
-      runIdempotentMutation(pool, {
-        scope: "favorites.add",
-        key: "client-key-2",
-        fingerprint: "fp-different",
-        apply: async () => ({ status: 201, body: { created: true } })
-      })
+  it("round-trips the 1:1 link, preserves created_at across re-link, and conflicts on a stolen user id", async () => {
+    await resetTables();
+    const vali = await createProfile(pool, { displayName: "Vali" });
+    const nicole = await createProfile(pool, { displayName: "Nicole" });
+
+    const linked = await putJellyfinLink(pool, vali.id, "jf-user-a");
+    assert.equal(linked.jellyfinUserId, "jf-user-a");
+    const fetched = await getJellyfinLink(pool, vali.id);
+    assert.equal(fetched?.jellyfinUserId, "jf-user-a");
+
+    const relinked = await putJellyfinLink(pool, vali.id, "jf-user-b");
+    assert.equal(relinked.jellyfinUserId, "jf-user-b");
+    assert.equal(relinked.createdAt, linked.createdAt, "re-link must keep the original creation stamp");
+    assert.notEqual(relinked.updatedAt, linked.updatedAt);
+
+    await assert.rejects(
+      putJellyfinLink(pool, nicole.id, "jf-user-b"),
+      HouseholdConflictError,
+      "a jellyfin user id already claimed by another profile must conflict"
     );
-    // A different scope may reuse the same client key.
-    const otherScope = await runIdempotentMutation(pool, {
-      scope: "watchlists.create",
-      key: "client-key-2",
-      fingerprint: "fp-watchlist",
-      apply: async (tx) => {
-        const { watchlist } = await createWatchlist(tx, profileA, "Keyed");
-        return { status: 201, body: { created: true, id: watchlist.id } };
-      }
-    });
-    assert.equal(otherScope.replayed, false);
+
+    assert.equal(await deleteJellyfinLink(pool, vali.id), true);
+    assert.equal(await getJellyfinLink(pool, vali.id), null);
+    assert.equal(await deleteJellyfinLink(pool, vali.id), false);
   });
 
-  it("rolls back the whole mutation when a step fails mid-transaction", async () => {
-    await rejectsWith("profile_not_found", () =>
-      withTransaction(pool, async (tx) => {
-        // A write that succeeds, followed by one that must fail: the
-        // committed result must contain neither.
-        await addFavorite(tx, profileA, await resolveMediaRef(tx, MEDIA_A));
-        await requireProfile(tx, "0f0e8c4a-7b1e-4d3e-9f2a-1b2c3d4e5f99");
-      })
+  it("refuses a link for a missing profile", async () => {
+    await resetTables();
+    await assert.rejects(
+      putJellyfinLink(pool, "00000000-0000-0000-0000-000000000003", "jf-user-x"),
+      HouseholdNotFoundError
     );
-    assert.equal(Number((await pool.query("SELECT count(*) AS n FROM favorite")).rows[0].n), 0);
+  });
+});
 
-    // A failed (and therefore rolled back) idempotency claim frees the key.
-    await rejectsWith("profile_not_found", () =>
-      runIdempotentMutation(pool, {
-        scope: "favorites.add",
-        key: "retry-key",
-        fingerprint: "fp-retry",
-        apply: async (tx) => {
-          await requireProfile(tx, "0f0e8c4a-7b1e-4d3e-9f2a-1b2c3d4e5f99");
-          return { status: 201, body: {} };
-        }
+describe("watch state and the continue-watching overlay", () => {
+  it("records progress atomically: one overlay row, one history event per write", async () => {
+    await resetTables();
+    const profile = await createProfile(pool, { displayName: "Vali" });
+
+    const first = await transact(pool, (tx) =>
+      recordWatchProgress(tx, {
+        profileId: profile.id,
+        source: "jellyfin",
+        externalId: "movie-1",
+        positionTicks: 300,
+        durationTicks: 6000,
+        completed: false
       })
     );
-    assert.equal(
-      Number((await pool.query("SELECT count(*) AS n FROM idempotency_record")).rows[0].n),
-      0,
-      "a rolled-back attempt must not consume its idempotency key"
+    assert.equal(first.positionTicks, 300);
+    assert.equal(first.durationTicks, 6000);
+    assert.equal(first.completed, false);
+    assert.equal(first.source, "jellyfin");
+    assert.equal(first.externalId, "movie-1");
+
+    const second = await transact(pool, (tx) =>
+      recordWatchProgress(tx, {
+        profileId: profile.id,
+        source: "jellyfin",
+        externalId: "movie-1",
+        positionTicks: 900,
+        durationTicks: 6000,
+        completed: false
+      })
+    );
+    assert.equal(second.positionTicks, 900);
+
+    await withClient(HOUSEHOLD_DATABASE_URL, async (client) => {
+      assert.equal(await scalar(client, "SELECT count(*) FROM watch_state"), 1);
+      assert.equal(await scalar(client, "SELECT count(*) FROM playback_event"), 2);
+      assert.equal(await scalar(client, "SELECT count(*) FROM media_item_ref"), 1);
+    });
+
+    const fetched = await getWatchState(pool, profile.id, "jellyfin", "movie-1");
+    assert.equal(fetched?.positionTicks, 900);
+    assert.equal(await getWatchState(pool, profile.id, "jellyfin", "movie-missing"), null);
+  });
+
+  it("rolls back the whole progress write (media ref included) when the transaction fails", async () => {
+    await resetTables();
+    const profile = await createProfile(pool, { displayName: "Vali" });
+
+    const boom = new Error("simulated crash after the ref resolves");
+    await assert.rejects(
+      transact(pool, async (tx) => {
+        const state = await recordWatchProgress(tx, {
+          profileId: profile.id,
+          source: "jellyfin",
+          externalId: "movie-rollback",
+          positionTicks: 10,
+          completed: false
+        });
+        assert.ok(state);
+        throw boom;
+      }),
+      (error: unknown) => error === boom
+    );
+
+    await withClient(HOUSEHOLD_DATABASE_URL, async (client) => {
+      assert.equal(await scalar(client, "SELECT count(*) FROM watch_state"), 0);
+      assert.equal(await scalar(client, "SELECT count(*) FROM playback_event"), 0);
+      assert.equal(await scalar(client, "SELECT count(*) FROM media_item_ref"), 0, "the ref must not survive a rolled-back write");
+    });
+  });
+
+  it("maps a write for a missing profile to not-found and leaves no orphan ref", async () => {
+    await resetTables();
+    await assert.rejects(
+      transact(pool, (tx) =>
+        recordWatchProgress(tx, {
+          profileId: "00000000-0000-0000-0000-000000000004",
+          source: "jellyfin",
+          externalId: "movie-orphan",
+          positionTicks: 5,
+          completed: false
+        })
+      ),
+      (error: unknown) => {
+        assertNoSecret(error);
+        return error instanceof HouseholdNotFoundError;
+      }
+    );
+    await withClient(HOUSEHOLD_DATABASE_URL, async (client) => {
+      assert.equal(await scalar(client, "SELECT count(*) FROM media_item_ref"), 0);
+    });
+  });
+
+  it("refuses position beyond duration at the database and classifies it as input", async () => {
+    await resetTables();
+    const profile = await createProfile(pool, { displayName: "Vali" });
+    // Bypass the request-layer validation on purpose: prove the database
+    // CHECK is the backstop and the store maps it to HouseholdInputError.
+    await assert.rejects(
+      transact(pool, (tx) =>
+        recordWatchProgress(tx, {
+          profileId: profile.id,
+          source: "jellyfin",
+          externalId: "movie-overrun",
+          positionTicks: 999,
+          durationTicks: 10,
+          completed: false
+        })
+      ),
+      HouseholdInputError
     );
   });
 
-  it("keeps responses within the bounded replay contract", async () => {
-    // The 8 KiB CHECK lives in the schema; prove it rejects oversized bodies.
-    const bigBody = { payload: "x".repeat(20_000) };
-    await pool
-      .query(
-        "INSERT INTO idempotency_record (scope, idempotency_key, fingerprint, response_status, response_body) VALUES ($1, $2, $3, 200, $4::jsonb)",
-        ["bounded.test", "oversized", "fp", JSON.stringify(bigBody)]
-      )
-      .then(
-        () => assert.fail("oversized response body must violate idempotency_record_response_shape"),
-        (error: unknown) => {
-          const code = (error as { code?: string }).code;
-          assert.equal(code, "23514", `expected CHECK violation 23514, got ${String(error)}`);
-        }
+  it("answers the continue-watching query: excludes unstarted and completed, orders by recency, bounds the limit", async () => {
+    await resetTables();
+    const profile = await createProfile(pool, { displayName: "Vali" });
+    const record = (externalId: string, positionTicks: number, completed: boolean) =>
+      transact(pool, (tx) =>
+        recordWatchProgress(tx, {
+          profileId: profile.id,
+          source: "jellyfin",
+          externalId,
+          positionTicks,
+          completed
+        })
       );
+
+    await record("unstarted", 0, false);
+    await record("in-progress-a", 100, false);
+    await record("in-progress-b", 200, false);
+    await record("finished", 5000, true);
+
+    // Deterministic recency: stamp explicit last_played_at values instead of
+    // racing the server clock.
+    await withClient(HOUSEHOLD_DATABASE_URL, async (client) => {
+      await client.query(
+        `UPDATE watch_state SET last_played_at = timestamptz '2026-09-19 10:00:00+00' WHERE media_ref_id = (SELECT id FROM media_item_ref WHERE external_id = 'in-progress-a')`,
+        []
+      );
+      await client.query(
+        `UPDATE watch_state SET last_played_at = timestamptz '2026-09-19 11:00:00+00' WHERE media_ref_id = (SELECT id FROM media_item_ref WHERE external_id = 'in-progress-b')`,
+        []
+      );
+      await client.query(
+        `UPDATE watch_state SET last_played_at = timestamptz '2026-09-19 12:00:00+00' WHERE media_ref_id = (SELECT id FROM media_item_ref WHERE external_id = 'finished')`,
+        []
+      );
+    });
+
+    const continueWatching = await listContinueWatching(pool, profile.id, { limit: 20 });
+    assert.deepEqual(
+      continueWatching.map((item) => item.externalId),
+      ["in-progress-b", "in-progress-a"],
+      "newest activity first, completed and unstarted excluded"
+    );
+
+    const bounded = await listContinueWatching(pool, profile.id, { limit: 1 });
+    assert.equal(bounded.length, 1);
+    assert.equal(bounded[0]?.externalId, "in-progress-b");
+
+    const everything = await listWatchState(pool, profile.id, { limit: 50 });
+    assert.equal(everything.length, 4);
+
+    // Recovery: finishing then resuming returns the item to the rail.
+    await record("in-progress-b", 6000, true);
+    assert.equal((await listContinueWatching(pool, profile.id, { limit: 20 })).length, 1);
+    await record("in-progress-b", 6100, false);
+    const resumed = await listContinueWatching(pool, profile.id, { limit: 20 });
+    assert.equal(resumed.length, 2);
+    assert.equal(resumed[0]?.externalId, "in-progress-b");
+  });
+
+  it("scopes every read and write to the owning profile", async () => {
+    await resetTables();
+    const vali = await createProfile(pool, { displayName: "Vali" });
+    const nicole = await createProfile(pool, { displayName: "Nicole" });
+    await transact(pool, (tx) =>
+      recordWatchProgress(tx, {
+        profileId: vali.id,
+        source: "jellyfin",
+        externalId: "shared-movie",
+        positionTicks: 100,
+        completed: false
+      })
+    );
+    const nicoleItems = await listWatchState(pool, nicole.id, { limit: 50 });
+    assert.equal(nicoleItems.length, 0);
+    const valiItems = await listWatchState(pool, vali.id, { limit: 50 });
+    assert.equal(valiItems.length, 1);
+    // The same external id records independently per profile.
+    await transact(pool, (tx) =>
+      recordWatchProgress(tx, {
+        profileId: nicole.id,
+        source: "jellyfin",
+        externalId: "shared-movie",
+        positionTicks: 200,
+        completed: false
+      })
+    );
+    assert.equal((await listWatchState(pool, nicole.id, { limit: 50 }))[0]?.positionTicks, 200);
+    assert.equal((await listWatchState(pool, vali.id, { limit: 50 }))[0]?.positionTicks, 100);
+  });
+});
+
+describe("sync metadata", () => {
+  it("tracks the started/succeeded lifecycle and preserves the cursor across a cursor-less restart", async () => {
+    await resetTables();
+    const startedAt = new Date("2026-09-19T10:00:00Z");
+    const started = await markSyncStarted(pool, { job: "household_probe", cursor: { page: 3 } }, startedAt);
+    assert.deepEqual(started.cursor, { page: 3 });
+    assert.equal(started.lastStartedAt, startedAt.toISOString());
+
+    const restarted = await markSyncStarted(pool, { job: "household_probe" }, new Date("2026-09-19T10:05:00Z"));
+    assert.deepEqual(restarted.cursor, { page: 3 }, "an absent cursor must preserve the stored one");
+
+    const succeeded = await markSyncSucceeded(
+      pool,
+      "household_probe",
+      new Date("2026-09-19T10:06:00Z"),
+      { page: 7 }
+    );
+    assert.ok(succeeded);
+    assert.equal(new Date(succeeded?.lastSucceededAt ?? 0).getTime(), Date.parse("2026-09-19T10:06:00Z"));
+    assert.equal(succeeded?.lastError, null);
+    assert.deepEqual(succeeded?.cursor, { page: 7 });
+  });
+
+  it("carries a bounded error through failure and keeps the last good run visible, then recovers", async () => {
+    await resetTables();
+    await markSyncStarted(pool, { job: "household_probe", cursor: { page: 2 } }, new Date("2026-09-19T10:00:00Z"));
+    await markSyncSucceeded(pool, "household_probe", new Date("2026-09-19T10:01:00Z"));
+
+    const huge = "x".repeat(10_000);
+    const failed = await markSyncFailed(pool, "household_probe", huge);
+    assert.ok(failed);
+    assert.ok((failed?.lastError?.length ?? 0) <= 2001, "failure text must be bounded");
+    assert.equal(
+      new Date(failed?.lastSucceededAt ?? 0).getTime(),
+      Date.parse("2026-09-19T10:01:00Z"),
+      "failure must not erase the last good run"
+    );
+    assert.deepEqual(failed?.cursor, { page: 2 });
+
+    const recovered = await markSyncSucceeded(pool, "household_probe", new Date("2026-09-19T10:10:00Z"));
+    assert.ok(recovered);
+    assert.equal(recovered?.lastError, null);
+    assert.equal(new Date(recovered?.lastSucceededAt ?? 0).getTime(), Date.parse("2026-09-19T10:10:00Z"));
+  });
+
+  it("returns null for lifecycle writes on unknown jobs", async () => {
+    await resetTables();
+    assert.equal(await markSyncFailed(pool, "never-started", "boom"), null);
+    assert.equal(await markSyncSucceeded(pool, "never-started", new Date()), null);
+  });
+});
+
+describe("idempotent progress recording", () => {
+  it("claims once, replays without duplicating history, and conflicts on payload changes", async () => {
+    await resetTables();
+    const profile = await createProfile(pool, { displayName: "Vali" });
+    const input = {
+      profileId: profile.id,
+      source: "jellyfin" as const,
+      externalId: "movie-idem",
+      positionTicks: 400,
+      durationTicks: 8000,
+      completed: false
+    };
+    const fingerprint = fingerprintWatchProgress(input);
+    const key = "client-request-1";
+
+    const recordOnce = async (runner: Pool) => {
+      return transact(runner, async (tx) => {
+        const claim = await claimIdempotencyKey(tx, WATCH_PROGRESS_IDEMPOTENCY_SCOPE, key, fingerprint);
+        if (claim !== "claimed") {
+          const existing = await getWatchState(tx, input.profileId, input.source, input.externalId);
+          if (existing) return { replay: true as const, state: existing };
+        }
+        return { replay: false as const, state: await recordWatchProgress(tx, input) };
+      });
+    };
+
+    const first = await recordOnce(pool);
+    assert.equal(first.replay, false);
+
+    const replay = await recordOnce(pool);
+    assert.equal(replay.replay, true);
+    assert.equal(replay.state.positionTicks, 400);
+
+    await withClient(HOUSEHOLD_DATABASE_URL, async (client) => {
+      assert.equal(await scalar(client, "SELECT count(*) FROM playback_event"), 1, "replay must not append history");
+      assert.equal(await scalar(client, "SELECT count(*) FROM idempotency_record"), 1);
+    });
+
+    await assert.rejects(
+      transact(pool, (tx) =>
+        claimIdempotencyKey(
+          tx,
+          WATCH_PROGRESS_IDEMPOTENCY_SCOPE,
+          key,
+          fingerprintWatchProgress({ ...input, positionTicks: 999 })
+        )
+      ),
+      HouseholdConflictError,
+      "same key with a different payload must conflict"
+    );
+  });
+
+  it("scopes keys so different scopes never collide", async () => {
+    await resetTables();
+    const first = await claimIdempotencyKey(pool, WATCH_PROGRESS_IDEMPOTENCY_SCOPE, "shared-key", "fp-a");
+    assert.equal(first, "claimed");
+    const otherScope = await claimIdempotencyKey(pool, "other_scope", "shared-key", "fp-b");
+    assert.equal(otherScope, "claimed");
   });
 });

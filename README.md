@@ -126,15 +126,23 @@ database.
 
 ## Household state API
 
-Favorites, watchlists, curated collections, and home-screen row
-configuration persist to the `reelhouse` database and are served through
-`/api/favorites`, `/api/watchlists`, `/api/collections`, and
-`/api/home-rows`. Every operation is scoped to a household profile
-(isolation is enforced in SQL, and foreign rows read as 404), and every
-mutation is idempotent: natural idempotency from unique keys, plus optional
-`Idempotency-Key` replay protection that returns the original response
-byte-for-byte. The endpoint reference, semantics, error codes, and bounds
-are documented in [docs/HOUSEHOLD_STATE.md](docs/HOUSEHOLD_STATE.md).
+ReelHouse-owned household state persists in the `reelhouse` PostgreSQL 18
+database and is served to clients only through the ReelHouse API, never
+through direct database access:
+
+- **Profiles & per-profile state** (`/api/profiles…`): profiles, per-profile
+  preferences, the watch/continue-watching overlay, and Jellyfin account
+  links; progress writes are transactional and support safe retries via
+  `Idempotency-Key`.
+- **Lists & home rows** (`/api/favorites`, `/api/watchlists`,
+  `/api/collections`, `/api/home-rows`): durable favorites, watchlists,
+  curated collections, and home-screen row configuration with SQL-enforced
+  profile isolation (foreign rows read as 404) and `Idempotency-Key` replay
+  protection that returns the original response byte-for-byte.
+
+Every response message is bounded and value-free.
+See [docs/HOUSEHOLD_STATE.md](docs/HOUSEHOLD_STATE.md) for the route
+contracts, identity rules, ordering semantics, and error semantics.
 
 ## Security note
 
