@@ -144,7 +144,7 @@ describe("smoke: fail-closed configuration", () => {
 
   it("rejects invalid configuration before any network I/O", async () => {
     const report = await runSmoke({
-      env: { DATABASE_URL: "not-a-database-url" },
+      env: { DATABASE_URL: "mysql://reelhouse_test:reelhouse_test@127.0.0.1:55433/reelhouse_smoke" },
       migrationsDir: MIGRATIONS_DIR,
       log: () => {}
     });

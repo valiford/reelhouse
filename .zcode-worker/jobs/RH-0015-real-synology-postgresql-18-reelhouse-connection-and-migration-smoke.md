@@ -1,9 +1,9 @@
 # RH-0015 — Real Synology PostgreSQL 18 ReelHouse connection and migration smoke
 
-**STATUS:** READY
-**AGENT:** ZCODE
-**AUTOMATION_ELIGIBLE:** true
-**WAVE:** Tomorrow priority
+**STATUS:** REVIEW  
+**AGENT:** ZCODE  
+**AUTOMATION_ELIGIBLE:** true  
+**DEPENDENCY:** RH-0002 + RH-0003 layers integrated on this branch (both in REVIEW); real-Synology leg pending operator-provisioned environment credentials — see report
 
 ## Goal
 Wire the server-side ReelHouse data layer to the existing Synology PostgreSQL 18 `reelhouse` database using environment-only credentials, verify migrations, pooling, transactions, readiness, and safe failure diagnostics.
