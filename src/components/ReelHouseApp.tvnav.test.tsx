@@ -306,16 +306,16 @@ describe("ReelHouseApp search results resilience", () => {
     expect(screen.getByText("1 matches")).toBeTruthy();
   });
 
-  it("keeps the demo library when the library request fails", async () => {
+  it("keeps the demo library when the library request fails, with an explicit unavailable chip", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-      if (isApi(input, "/api/library")) return { ok: false, status: 500 } as Response;
+      if (isApi(input, "/api/library")) return new Response(null, { status: 500 });
       return jsonResponse(demoLibrary);
     }));
 
     render(<ReelHouseApp />);
-    expect(await screen.findByText(/Demo library/)).toBeTruthy();
+    expect(await screen.findByText(/ReelHouse Engine unreachable — demo titles shown/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Play" })).toBeTruthy();
-    expect(warn).toHaveBeenCalledWith("[reelhouse] library unavailable, showing demo:", "Library failed (HTTP 500).");
+    expect(warn).toHaveBeenCalledWith("[reelhouse] engine connection failed:", "Library failed (HTTP 500).");
   });
 });

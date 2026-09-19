@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ReelHouseApp from "./ReelHouseApp";
 import type { LibraryPayload, SearchPayload } from "@/lib/types";
@@ -14,16 +14,25 @@ type DeferredCall = {
 
 function installDeferredFetch(): DeferredCall[] {
   const calls: DeferredCall[] = [];
+  const abortError = () => new DOMException("The operation was aborted.", "AbortError");
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       return new Promise<Response>((resolve, reject) => {
-        calls.push({
+        const signal = init?.signal as AbortSignal | undefined;
+        const call: DeferredCall = {
           url: String(input),
-          signal: init?.signal as AbortSignal,
+          signal: signal as AbortSignal,
           resolve,
           reject
-        });
+        };
+        calls.push(call);
+        // Match real fetch: an aborted signal rejects the pending request.
+        if (signal?.aborted) {
+          reject(abortError());
+          return;
+        }
+        signal?.addEventListener("abort", () => reject(abortError()), { once: true });
       });
     })
   );
@@ -66,6 +75,7 @@ async function openSearchAndType(user: ReturnType<typeof userEvent.setup>, term:
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 describe("ReelHouseApp search interactions", () => {
@@ -222,6 +232,135 @@ describe("ReelHouseApp library surface", () => {
 
     libraryCall(calls)!.resolve(jsonResponse({ ...LIBRARY, source: "jellyfin" }));
     expect(await screen.findByText("● Connected to ReelHouse Engine")).toBeTruthy();
+  });
+});
+
+describe("ReelHouseApp engine connection lifecycle", () => {
+  function libraryCalls(calls: DeferredCall[]): DeferredCall[] {
+    return calls.filter((call) => call.url.includes("/api/library"));
+  }
+
+  it("degrades to an explicit unavailable state, auto-reconnects, and acknowledges recovery", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const calls = installDeferredFetch();
+    render(<ReelHouseApp />);
+
+    libraryCall(calls)!.reject(new Error("connect ECONNREFUSED"));
+    const banner = await screen.findByRole("alert");
+    expect(banner.textContent).toContain("Couldn’t reach the ReelHouse API");
+    expect(banner.textContent).toContain("connect ECONNREFUSED");
+    expect(await screen.findByText(/ReelHouse Engine unreachable — demo titles shown/)).toBeTruthy();
+    expect(screen.getByText(/reconnecting \(attempt 1\)/)).toBeTruthy();
+
+    // First automatic retry fires at the bottom of the backoff ladder.
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(libraryCalls(calls)).toHaveLength(2);
+    libraryCalls(calls)[1].resolve(jsonResponse({ ...LIBRARY, source: "jellyfin" }));
+    expect(await screen.findByText("Reconnected to ReelHouse Engine")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    // The recovery acknowledgment is transient.
+    await act(async () => { await vi.advanceTimersByTimeAsync(6_000); });
+    expect(screen.getByText("● Connected to ReelHouse Engine")).toBeTruthy();
+  });
+
+  it("keeps the last engine data as stale when a health refresh fails, then recovers", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const calls = installDeferredFetch();
+    render(<ReelHouseApp />);
+
+    libraryCall(calls)!.resolve(jsonResponse({ ...LIBRARY, source: "jellyfin" }));
+    expect(await screen.findByText("● Connected to ReelHouse Engine")).toBeTruthy();
+
+    // Quiet health refresh (60s while healthy) fails while engine data is
+    // on screen: the data stays, explicitly marked stale.
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(libraryCalls(calls)).toHaveLength(2);
+    libraryCalls(calls)[1].reject(new Error("connect ECONNREFUSED"));
+    expect(await screen.findByText(/Connection lost — showing last synced titles/)).toBeTruthy();
+    expect(screen.getByText(/reconnecting \(attempt 1\)/)).toBeTruthy();
+    const banner = screen.getByRole("alert");
+    expect(banner.textContent).toContain("Lost connection to the ReelHouse API");
+    expect(banner.className).toContain("stale");
+    expect(screen.getByText("Lib Movie")).toBeTruthy();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    libraryCalls(calls)[2].resolve(jsonResponse({ ...LIBRARY, source: "jellyfin" }));
+    expect(await screen.findByText("Reconnected to ReelHouse Engine")).toBeTruthy();
+  });
+
+  it("treats a degraded engine payload as unavailable and surfaces the server reason", async () => {
+    const calls = installDeferredFetch();
+    render(<ReelHouseApp />);
+
+    libraryCall(calls)!.resolve(jsonResponse({
+      ...LIBRARY,
+      source: "demo",
+      degraded: true,
+      degradedReason: "Jellyfin 503",
+      sections: []
+    }));
+    const banner = await screen.findByRole("alert");
+    expect(banner.textContent).toContain("Couldn’t reach the ReelHouse API");
+    expect(banner.textContent).toContain("(Jellyfin 503)");
+    expect(await screen.findByText(/ReelHouse Engine unreachable — demo titles shown/)).toBeTruthy();
+  });
+
+  it("degrades a slow engine into an explicit timeout with a reconnect attempt", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const calls = installDeferredFetch();
+    render(<ReelHouseApp />);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
+    expect(libraryCall(calls)!.signal.aborted).toBe(true);
+    const banner = await screen.findByRole("alert");
+    expect(banner.textContent).toContain("Media engine timed out after 12s.");
+    expect(screen.getByText(/reconnecting \(attempt 1\)/)).toBeTruthy();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    libraryCalls(calls)[1].resolve(jsonResponse({ ...LIBRARY, source: "jellyfin" }));
+    expect(await screen.findByText("Reconnected to ReelHouse Engine")).toBeTruthy();
+  });
+
+  it("surfaces malformed library payloads explicitly", async () => {
+    const calls = installDeferredFetch();
+    render(<ReelHouseApp />);
+
+    libraryCall(calls)!.resolve(jsonResponse({ unexpected: true }));
+    const banner = await screen.findByRole("alert");
+    expect(banner.textContent).toContain("Library returned malformed data.");
+  });
+
+  it("surfaces malformed search payloads explicitly", async () => {
+    const user = userEvent.setup();
+    const calls = installDeferredFetch();
+    render(<ReelHouseApp />);
+
+    await openSearchAndType(user, "northern");
+    await waitFor(() => expect(searchCalls(calls)).toHaveLength(1));
+    searchCalls(calls)[0].resolve(jsonResponse({ unexpected: true }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Search returned malformed data.");
+  });
+
+  it("times out a slow search with an explicit message", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const calls = installDeferredFetch();
+    render(<ReelHouseApp />);
+
+    // Settle the library first so its own timeout cannot join the alert set.
+    libraryCall(calls)!.resolve(jsonResponse(LIBRARY));
+    expect(await screen.findByText("Lib Movie")).toBeTruthy();
+
+    await openSearchAndType(user, "northern");
+    await act(async () => { await vi.advanceTimersByTimeAsync(220); });
+    await waitFor(() => expect(searchCalls(calls)).toHaveLength(1));
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
+    expect(searchCalls(calls)[0].signal.aborted).toBe(true);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Search timed out after 12s");
   });
 });
 
