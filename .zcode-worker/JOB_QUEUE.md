@@ -6,6 +6,8 @@ The highest-priority READY job with satisfied dependencies and `AUTOMATION_ELIGI
 
 | Priority | Job ID | Status | Agent | Description |
 |---:|---|---|---|---|
+| 1 | RH-0022 | READY | ZCODE | Household continue-watching reconciliation and profile isolation guard |
+| 2 | RH-0023 | READY | ZCODE | Media catalog identity conflict quarantine and repair workflow |
 | 1 | RH-0015 | READY | ZCODE | Real Synology PostgreSQL 18 ReelHouse connection and migration smoke |
 | 2 | RH-0016 | READY | ZCODE | Jellyfin to PostgreSQL media_catalog synchronization |
 | 3 | RH-0017 | READY | ZCODE | Household profiles preferences and watch-state persistence |
