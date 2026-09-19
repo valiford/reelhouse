@@ -71,19 +71,22 @@ Build thin clients for Android TV / Fire TV first, then Apple TV / Roku / Samsun
 
 Local development and deterministic verification run on Node 22+ with no
 credentials — the UI serves the built-in demo library when the Jellyfin
-env vars are unset:
+env vars are unset (and when `DATABASE_URL` is unset; see
+[docs/DATABASE.md](docs/DATABASE.md)):
 
 ```bash
 npm install
 npm run lint
 npm run typecheck
+npm test
 npm run build && npm start
 ```
 
-Then check `GET /` (app shell), `GET /api/library`, and
-`GET /api/search?q=`. See [docs/BASELINE.md](docs/BASELINE.md) for the
-full imported-source baseline: deployment mapping, data authorities,
-and the PostgreSQL 18 migration surface.
+Then check `GET /` (app shell), `GET /api/library`,
+`GET /api/search?q=`, and `GET /api/health` (database readiness). See
+[docs/BASELINE.md](docs/BASELINE.md) for the full imported-source
+baseline: deployment mapping, data authorities, and the PostgreSQL 18
+migration surface.
 
 ## Security note
 
