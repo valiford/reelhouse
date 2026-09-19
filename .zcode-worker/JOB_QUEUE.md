@@ -10,13 +10,9 @@ The highest-priority READY job with satisfied dependencies and `AUTOMATION_ELIGI
 | 2 | RH-0016 | READY | ZCODE | Jellyfin to PostgreSQL media_catalog synchronization |
 | 3 | RH-0017 | READY | ZCODE | Household profiles preferences and watch-state persistence |
 | 4 | RH-0018 | READY | ZCODE | Favorites watchlists collections and home-row persistence |
-| 5 | RH-0019 | READY | ZCODE | TV remote keyboard and living-room interaction overhaul |
 | 6 | RH-0020 | READY | ZCODE | Search library discovery and recommendation read-model enhancement |
 | 7 | RH-0021 | READY | ZCODE | PostgreSQL backup restore catalog rebuild and disaster recovery |
 | 1 | RH-0008 | READY | ZCODE | Next.js security upgrade and regression verification |
-| 2 | RH-0009 | READY | ZCODE | TV remote keyboard and focus-navigation shell |
-| 3 | RH-0010 | READY | ZCODE | Search filtering pagination and bounded-result contract |
-| 4 | RH-0011 | READY | ZCODE | Responsive home library presentation and poster fallback pass |
 | 5 | RH-0012 | READY | ZCODE | Jellyfin degraded-mode and reconnection UX |
 | 6 | RH-0013 | READY | ZCODE | Poster image loading and performance guard |
 | 7 | RH-0014 | READY | ZCODE | Accessibility and reduced-motion regression suite |
@@ -38,7 +34,12 @@ _None._
 
 ## Review Queue
 
-_None._
+| Priority | Job ID | Status | Agent | Description |
+|---:|---|---|---|---|
+| 2 | RH-0009 | REVIEW | ZCODE | TV remote keyboard and focus-navigation shell (`rh-0009-tv-remote-keyboard-and-focus-navigation-shell`) |
+| 3 | RH-0010 | REVIEW | ZCODE | Search filtering pagination and bounded-result contract (`rh-0010-search-filtering-pagination-and-bounded-result-contract`) |
+| 4 | RH-0011 | REVIEW | ZCODE | Responsive home library presentation and poster fallback pass (`rh-0011-responsive-home-library-presentation-and-poster-fallback-pass`; carries rh-0010) |
+| 5 | RH-0019 | REVIEW | ZCODE | TV remote keyboard and living-room interaction overhaul (`rh-0019-tv-remote-keyboard-and-living-room-interaction-overhaul`; integrates rh-0009 + rh-0011 chain) |
 
 ## Completed / Integrated
 

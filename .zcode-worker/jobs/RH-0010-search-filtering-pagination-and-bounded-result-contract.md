@@ -1,6 +1,6 @@
 # RH-0010 — Search filtering pagination and bounded-result contract
 
-**STATUS:** READY
+**STATUS:** REVIEW
 **AGENT:** ZCODE
 **AUTOMATION_ELIGIBLE:** true
 

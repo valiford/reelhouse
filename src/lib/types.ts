@@ -14,8 +14,32 @@ export type MediaItem = {
   genres?: string[];
 };
 
+export type LibrarySection = {
+  title: string;
+  items: MediaItem[];
+};
+
 export type LibraryPayload = {
   source: "demo" | "jellyfin";
   hero: MediaItem;
-  sections: Array<{ title: string; items: MediaItem[] }>;
+  sections: LibrarySection[];
+  /** True when Jellyfin was expected to serve this payload but fell back to demo data. */
+  degraded?: boolean;
+};
+
+export type SearchPayload = {
+  source: "demo" | "jellyfin";
+  query: string;
+  items: MediaItem[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type ReelHouseApiError = {
+  error: {
+    code: "invalid_query" | "upstream_unavailable";
+    field?: string;
+    message: string;
+  };
 };

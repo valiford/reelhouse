@@ -1,6 +1,6 @@
 # RH-0009 — TV remote keyboard and focus-navigation shell
 
-**STATUS:** READY
+**STATUS:** REVIEW
 **AGENT:** ZCODE
 **AUTOMATION_ELIGIBLE:** true
 

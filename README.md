@@ -14,7 +14,7 @@ A private, household media interface for Synology NAS users. ReelHouse uses Jell
 - Dark amber streaming UI
 - Household profiles for V’Ali and Nicole
 - Continue Watching / Recently Added / Movies / Shows rails
-- Search
+- Search with bounded pagination, type filters, and explicit empty/error states
 - Metadata detail modal
 - Jellyfin library connection with demo fallback
 - Docker Compose for Synology
@@ -46,10 +46,20 @@ A private, household media interface for Synology NAS users. ReelHouse uses Jell
 ## TV strategy
 
 ### Immediately
-Use a smart-TV browser for ReelHouse, or a standard Jellyfin TV client for direct playback.
+ReelHouse ships a built-in TV remote mode: arrow keys drive spatial focus across the top bar, hero, rails, search, and detail modal; Enter activates; Back/Escape (including webOS 461, Tizen GoBack, and Fire TV 10009 key codes) closes the topmost layer; focus rings appear only while navigating by remote/keyboard. Large living-room displays pick up a denser 10-foot layout automatically. Use a smart-TV browser for ReelHouse, or a standard Jellyfin TV client for direct playback.
 
 ### Next
-Add a proper TV remote/focus mode and installable PWA.
+Add an installable PWA, fullscreen TV player, and inactivity handling.
+
+### Now included: remote keyboard and focus navigation
+
+The web UI is remote-first: arrow keys drive spatial focus across the
+topbar, hero, rails, cards, search, and detail modal; Enter/OK
+activates; Escape/Back closes the topmost layer (modal → search →
+profile menu) and never leaves the app; focus rings appear only while
+keyboard/remote navigation is active. See
+[docs/TV_NAVIGATION.md](docs/TV_NAVIGATION.md) for the key map, focus
+rules, and test coverage.
 
 ### Later
 Build thin clients for Android TV / Fire TV first, then Apple TV / Roku / Samsung / LG as needed. All clients use the same ReelHouse/Jellyfin backend.
@@ -64,7 +74,7 @@ Build thin clients for Android TV / Fire TV first, then Apple TV / Roku / Samsun
 6. Media-health dashboard (duplicates, broken files, missing posters, codec compatibility).
 7. Synology-aware hardware-transcoding setup wizard.
 8. Optional AI semantic search over household video metadata, e.g. “show our Santorini sunset videos.”
-9. TV remote navigation and 10-foot UI.
+9. TV remote navigation and 10-foot UI. *(focus-navigation shell shipped; player and PWA pending)*
 10. Optional remote access without exposing the NAS directly.
 
 ## Development & verification
@@ -77,13 +87,20 @@ env vars are unset:
 npm install
 npm run lint
 npm run typecheck
+npm run test
 npm run build && npm start
 ```
 
-Then check `GET /` (app shell), `GET /api/library`, and
-`GET /api/search?q=`. See [docs/BASELINE.md](docs/BASELINE.md) for the
-full imported-source baseline: deployment mapping, data authorities,
-and the PostgreSQL 18 migration surface.
+`npm run test` runs the deterministic vitest suite (spatial navigation
+engine, TV interaction shell, bounded search/library contract, and
+search-results resilience paths) with no network or credentials
+required. Then check `GET /` (app shell), `GET /api/library`, and
+`GET /api/search?q=`. The bounded search/library request contract is
+documented in
+[docs/SEARCH_LIBRARY_CONTRACT.md](docs/SEARCH_LIBRARY_CONTRACT.md). See
+[docs/BASELINE.md](docs/BASELINE.md) for the full imported-source
+baseline: deployment mapping, data authorities, and the PostgreSQL 18
+migration surface.
 
 ## Security note
 

@@ -1,8 +1,8 @@
 # RH-0019 — TV remote keyboard and living-room interaction overhaul
 
-**STATUS:** READY
-**AGENT:** ZCODE
-**AUTOMATION_ELIGIBLE:** true
+**STATUS:** REVIEW  
+**AGENT:** ZCODE  
+**AUTOMATION_ELIGIBLE:** true  
 **WAVE:** Tomorrow priority
 
 ## Goal
