@@ -1,6 +1,6 @@
 # RH-0018 — Favorites watchlists collections and home-row persistence
 
-**STATUS:** READY
+**STATUS:** REVIEW
 **AGENT:** ZCODE
 **AUTOMATION_ELIGIBLE:** true
 **WAVE:** Tomorrow priority
