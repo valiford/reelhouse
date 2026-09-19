@@ -1,6 +1,6 @@
 # RH-0017 — Household profiles preferences and watch-state persistence
 
-**STATUS:** READY
+**STATUS:** REVIEW
 **AGENT:** ZCODE
 **AUTOMATION_ELIGIBLE:** true
 **WAVE:** Tomorrow priority
