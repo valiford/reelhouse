@@ -8,13 +8,18 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/lib/db/config.test.ts src/lib/db/migrator.test.ts src/lib/db/smoke.test.ts",
-    "test:db": "node --test src/lib/db/migrations.int.test.ts src/lib/db/smoke.int.test.ts",
+    "test": "node --test src/lib/db/config.test.ts src/lib/db/migrator.test.ts src/lib/db/smoke.test.ts src/lib/catalog/config.test.ts src/lib/catalog/model.test.ts src/lib/catalog/client.test.ts",
+    "test:db": "node --test src/lib/db/migrations.int.test.ts src/lib/db/smoke.int.test.ts src/lib/catalog/catalog.int.test.ts",
     "test:db:up": "docker compose -f docker-compose.test-db.yml up -d --wait",
     "test:db:down": "docker compose -f docker-compose.test-db.yml down -v",
     "db:migrate": "node scripts/db-migrate.ts",
     "db:migrate:dry-run": "node scripts/db-migrate.ts --dry-run",
-    "db:smoke": "node scripts/db-smoke.ts"
+    "db:smoke": "node scripts/db-smoke.ts",
+    "catalog:migrate": "node scripts/catalog-migrate.ts",
+    "catalog:migrate:dry-run": "node scripts/catalog-migrate.ts --dry-run",
+    "catalog:sync": "node scripts/catalog-sync.ts",
+    "catalog:sync:full": "node scripts/catalog-sync.ts --full",
+    "catalog:rebuild": "node scripts/catalog-sync.ts --rebuild"
   },
   "dependencies": {
     "next": "16.0.1",
