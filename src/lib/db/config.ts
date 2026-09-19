@@ -94,7 +94,7 @@ function decodeComponent(value: string, label: string, errors: string[]): string
   try {
     return decodeURIComponent(value);
   } catch {
-    errors.push(`DATABASE_URL ${label} is not valid percent-encoding`);
+    errors.push(`${label} is not valid percent-encoding`);
     return value;
   }
 }
@@ -125,13 +125,19 @@ function parseSsl(value: string, source: string, errors: string[]): SslSetting {
   }
 }
 
-function readSsl(url: URL, env: Record<string, string | undefined>, errors: string[]): SslSetting {
+function readSsl(
+  url: URL,
+  env: Record<string, string | undefined>,
+  errors: string[],
+  urlVar: string,
+  sslVar: string
+): SslSetting {
   const urlMode = url.searchParams.get("sslmode");
   const urlAlias = url.searchParams.get("ssl");
-  if (urlMode) return parseSsl(urlMode, "DATABASE_URL sslmode", errors);
-  if (urlAlias) return parseSsl(urlAlias, "DATABASE_URL ssl", errors);
-  const envMode = env.DATABASE_SSL?.trim();
-  if (envMode) return parseSsl(envMode, "DATABASE_SSL", errors);
+  if (urlMode) return parseSsl(urlMode, `${urlVar} sslmode`, errors);
+  if (urlAlias) return parseSsl(urlAlias, `${urlVar} ssl`, errors);
+  const envMode = env[sslVar]?.trim();
+  if (envMode) return parseSsl(envMode, sslVar, errors);
   return undefined;
 }
 
@@ -155,34 +161,51 @@ function readOverride(
   return value;
 }
 
-export function loadDatabaseConfig(env: Record<string, string | undefined> = {}): DatabaseConfigResult {
-  const raw = env.DATABASE_URL?.trim();
+// Which environment variables a config is read from. The reelhouse database
+// uses the DATABASE_URL defaults; the media_catalog database passes its own
+// names (see src/lib/catalog/config.ts) so every validation, bound, and
+// redaction rule stays in exactly one place.
+export interface DatabaseConfigEnvNames {
+  urlVar?: string;
+  sslVar?: string;
+}
+
+const CONFIG_ENV_DEFAULTS = { urlVar: "DATABASE_URL", sslVar: "DATABASE_SSL" } as const;
+
+export function loadDatabaseConfig(
+  env: Record<string, string | undefined> = {},
+  names: DatabaseConfigEnvNames = {}
+): DatabaseConfigResult {
+  const urlVar = names.urlVar ?? CONFIG_ENV_DEFAULTS.urlVar;
+  const sslVar = names.sslVar ?? CONFIG_ENV_DEFAULTS.sslVar;
+
+  const raw = env[urlVar]?.trim();
   if (!raw) return { kind: "unconfigured" };
 
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
-    return { kind: "invalid", errors: ["DATABASE_URL is not a valid URL"] };
+    return { kind: "invalid", errors: [`${urlVar} is not a valid URL`] };
   }
 
   if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
-    return { kind: "invalid", errors: [`DATABASE_URL must use postgres:// or postgresql:// (got ${url.protocol})`] };
+    return { kind: "invalid", errors: [`${urlVar} must use postgres:// or postgresql:// (got ${url.protocol})`] };
   }
 
   const errors: string[] = [];
-  if (!url.hostname) errors.push("DATABASE_URL has no host");
+  if (!url.hostname) errors.push(`${urlVar} has no host`);
 
   const database = url.pathname.replace(/^\/+/, "");
-  if (!database) errors.push("DATABASE_URL has no database name");
+  if (!database) errors.push(`${urlVar} has no database name`);
 
   const port = url.port ? Number(url.port) : DATABASE_DEFAULTS.port;
-  if (!Number.isInteger(port) || port < 1 || port > 65535) errors.push("DATABASE_URL has an invalid port");
+  if (!Number.isInteger(port) || port < 1 || port > 65535) errors.push(`${urlVar} has an invalid port`);
 
-  const user = decodeComponent(url.username, "username", errors);
-  const password = decodeComponent(url.password, "password", errors);
+  const user = decodeComponent(url.username, `${urlVar} username`, errors);
+  const password = decodeComponent(url.password, `${urlVar} password`, errors);
 
-  const ssl = readSsl(url, env, errors);
+  const ssl = readSsl(url, env, errors, urlVar, sslVar);
   const poolMax = readOverride(env, "poolMax", errors);
   const connectionTimeoutMs = readOverride(env, "connectionTimeoutMs", errors);
   const idleTimeoutMs = readOverride(env, "idleTimeoutMs", errors);
