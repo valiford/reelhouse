@@ -16,6 +16,17 @@ const profiles = [
 
 const SEARCH_PAGE_SIZE = 24;
 
+/** Client-side deadline for one engine request: a slow Jellyfin must surface
+ *  as an explicit failure state, never an endless spinner. */
+const REQUEST_TIMEOUT_MS = 12_000;
+/** Automatic reconnect backoff ladder (ms) while the engine is unreachable. */
+const RECONNECT_BACKOFF_MS = [2_000, 4_000, 8_000, 16_000, 30_000] as const;
+/** Quiet health refresh while the engine is healthy, so a later outage is
+ *  detected and healed without user interaction. */
+const ENGINE_POLL_MS = 60_000;
+/** How long the “Reconnected” acknowledgment stays on the source chip. */
+const RECOVERY_FLASH_MS = 6_000;
+
 const KIND_FILTERS: Array<{ label: string; value: "" | MediaKind }> = [
   { label: "All", value: "" },
   { label: "Movies", value: "Movie" },
@@ -130,12 +141,37 @@ function appendUnique(existing: MediaItem[], incoming: MediaItem[]): MediaItem[]
   return [...existing, ...incoming.filter((item) => !seen.has(item.id))];
 }
 
+type EnginePhase = "connecting" | "ok" | "unavailable" | "stale";
 type SearchStatus = "idle" | "loading" | "ready" | "error";
+
+/** Reject malformed API bodies explicitly instead of rendering them. */
+function isLibraryPayload(value: unknown): value is LibraryPayload {
+  if (!value || typeof value !== "object") return false;
+  const payload = value as LibraryPayload;
+  return (payload.source === "demo" || payload.source === "jellyfin")
+    && typeof payload.hero?.title === "string"
+    && Array.isArray(payload.sections);
+}
+
+function isSearchPayload(value: unknown): value is SearchPayload {
+  if (!value || typeof value !== "object") return false;
+  const payload = value as SearchPayload;
+  return (payload.source === "demo" || payload.source === "jellyfin")
+    && typeof payload.total === "number"
+    && typeof payload.offset === "number"
+    && Array.isArray(payload.items);
+}
 
 export default function ReelHouseApp() {
   const [library, setLibrary] = useState<LibraryPayload>(demoLibrary);
-  const [libraryError, setLibraryError] = useState(false);
-  const [libraryLoading, setLibraryLoading] = useState(true);
+  // Engine connection lifecycle: connecting → ok, or — when the engine is
+  // slow, unreachable, or malformed — unavailable (demo titles stand in) or
+  // stale (last-good engine data stays), each with an automatic
+  // bounded-backoff reconnect cycle until the engine answers again.
+  const [enginePhase, setEnginePhase] = useState<EnginePhase>("connecting");
+  const [engineNotice, setEngineNotice] = useState<string | null>(null);
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
+  const [reconnected, setReconnected] = useState(false);
   const [activeProfile, setActiveProfile] = useState(profiles[0]);
   const [selected, setSelected] = useState<MediaItem | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -151,6 +187,16 @@ export default function ReelHouseApp() {
 
   const searchSeq = useRef(0);
   const searchAbort = useRef<AbortController | null>(null);
+
+  const librarySeq = useRef(0);
+  const libraryAbort = useRef<AbortController | null>(null);
+  const reconnectTimer = useRef<number | null>(null);
+  const pollTimer = useRef<number | null>(null);
+  const recoveryTimer = useRef<number | null>(null);
+  const attemptRef = useRef(0);
+  const libraryRef = useRef<LibraryPayload>(demoLibrary);
+  const loadLibraryRef = useRef<() => void>(() => {});
+  const unmountedRef = useRef(false);
 
   const homeRef = useRef<HTMLButtonElement>(null);
   const searchToggleRef = useRef<HTMLButtonElement>(null);
@@ -171,11 +217,21 @@ export default function ReelHouseApp() {
       setLoadingMore(true);
     }
 
+    // A hung engine must end in an explicit error, not an eternal spinner.
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
+
     fetch(`/api/search?${params}`, { signal: controller.signal })
       .then(async (response) => {
         const body = await response.json().catch(() => null);
         if (!response.ok) {
           throw new Error(body?.error?.message || `Search failed (HTTP ${response.status}).`);
+        }
+        if (!isSearchPayload(body)) {
+          throw new Error("Search returned malformed data.");
         }
         return body as SearchPayload;
       })
@@ -192,38 +248,136 @@ export default function ReelHouseApp() {
         setSearchStatus("ready");
       })
       .catch((error: unknown) => {
-        if (controller.signal.aborted || requestId !== searchSeq.current) return;
+        if (requestId !== searchSeq.current) return;
+        // Aborted requests are superseded or unmounted, not failed — except
+        // a timeout, which is this request's own explicit failure.
+        if (controller.signal.aborted && !timedOut) return;
         console.warn("[reelhouse] search failed:", boundedMessage(error));
-        setSearchError(error instanceof Error ? error.message : "Search failed.");
+        setSearchError(timedOut
+          ? `Search timed out after ${REQUEST_TIMEOUT_MS / 1000}s — the media engine is slow or unreachable.`
+          : error instanceof Error ? error.message : "Search failed.");
         setSearchStatus("error");
       })
       .finally(() => {
+        window.clearTimeout(timeoutId);
         if (requestId === searchSeq.current) setLoadingMore(false);
       });
   }, []);
 
-  const loadLibrary = useCallback((signal?: AbortSignal) => {
-    fetch("/api/library", { signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`Library failed (HTTP ${response.status}).`);
-        return response.json() as Promise<LibraryPayload>;
-      })
-      .then((payload) => {
-        setLibrary(payload);
-        setLibraryError(false);
-      })
-      .catch((error: unknown) => {
-        if (signal?.aborted) return;
-        console.warn("[reelhouse] library unavailable, showing demo:", boundedMessage(error));
-        setLibraryError(true);
-      })
-      .finally(() => {
-        if (!signal?.aborted) setLibraryLoading(false);
-      });
+  /** Record an engine failure: surface unavailable (no engine data yet —
+   *  demo titles stand in) vs. stale (last-good engine data stays), and keep
+   *  the automatic bounded-backoff reconnect cycle running. */
+  const failConnection = useCallback((reason: string) => {
+    if (unmountedRef.current) return;
+    if (pollTimer.current !== null) {
+      window.clearTimeout(pollTimer.current);
+      pollTimer.current = null;
+    }
+    const attempt = attemptRef.current + 1;
+    attemptRef.current = attempt;
+    setReconnectAttempt(attempt);
+    setEngineNotice(reason);
+    setEnginePhase(libraryRef.current.source === "jellyfin" ? "stale" : "unavailable");
+    if (reconnectTimer.current !== null) window.clearTimeout(reconnectTimer.current);
+    reconnectTimer.current = window.setTimeout(() => {
+      reconnectTimer.current = null;
+      loadLibraryRef.current();
+    }, RECONNECT_BACKOFF_MS[Math.min(attempt - 1, RECONNECT_BACKOFF_MS.length - 1)]);
   }, []);
 
+  const loadLibrary = useCallback((signal?: AbortSignal) => {
+    const requestId = ++librarySeq.current;
+    libraryAbort.current?.abort();
+    const controller = new AbortController();
+    libraryAbort.current = controller;
+    const forwardAbort = () => controller.abort();
+    if (signal) {
+      if (signal.aborted) controller.abort();
+      else signal.addEventListener("abort", forwardAbort, { once: true });
+    }
+
+    // A slow engine must degrade into an explicit failure state instead of
+    // holding the connecting chip open forever.
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
+
+    fetch("/api/library", { signal: controller.signal })
+      .then(async (response) => {
+        const body = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(body?.error?.message || `Library failed (HTTP ${response.status}).`);
+        }
+        if (!isLibraryPayload(body)) {
+          throw new Error("Library returned malformed data.");
+        }
+        return body as LibraryPayload;
+      })
+      .then((payload) => {
+        if (librarySeq.current !== requestId) return;
+        if (payload.degraded) {
+          // The API answered but the engine behind it is down. Last-good
+          // engine data stays on screen (stale); demo titles only replace
+          // the screen when there is nothing better to show.
+          if (libraryRef.current.source !== "jellyfin") {
+            libraryRef.current = payload;
+            setLibrary(payload);
+          }
+          failConnection(payload.degradedReason || "ReelHouse Engine is unreachable.");
+          return;
+        }
+        libraryRef.current = payload;
+        setLibrary(payload);
+        setEngineNotice(null);
+        setEnginePhase("ok");
+        if (attemptRef.current > 0) {
+          // Recovery: end the reconnect cycle and acknowledge it briefly.
+          attemptRef.current = 0;
+          setReconnectAttempt(0);
+          if (reconnectTimer.current !== null) {
+            window.clearTimeout(reconnectTimer.current);
+            reconnectTimer.current = null;
+          }
+          setReconnected(true);
+          if (recoveryTimer.current !== null) window.clearTimeout(recoveryTimer.current);
+          recoveryTimer.current = window.setTimeout(() => setReconnected(false), RECOVERY_FLASH_MS);
+        }
+        // Quiet health refresh so a later outage is detected and healed
+        // without user interaction.
+        if (pollTimer.current !== null) window.clearTimeout(pollTimer.current);
+        pollTimer.current = window.setTimeout(() => {
+          pollTimer.current = null;
+          loadLibraryRef.current();
+        }, ENGINE_POLL_MS);
+      })
+      .catch((error: unknown) => {
+        if (librarySeq.current !== requestId) return;
+        // Aborted loads are superseded or unmounted, not failed — except a
+        // timeout, which is this load's own explicit failure.
+        if (controller.signal.aborted && !timedOut) return;
+        const reason = timedOut
+          ? `Media engine timed out after ${REQUEST_TIMEOUT_MS / 1000}s.`
+          : boundedMessage(error);
+        console.warn("[reelhouse] engine connection failed:", reason);
+        failConnection(reason);
+      })
+      .finally(() => {
+        window.clearTimeout(timeoutId);
+        if (signal) signal.removeEventListener("abort", forwardAbort);
+      });
+  }, [failConnection]);
+
+  useEffect(() => {
+    loadLibraryRef.current = () => loadLibrary();
+  }, [loadLibrary]);
+
   const retryLibrary = useCallback(() => {
-    setLibraryLoading(true);
+    if (reconnectTimer.current !== null) {
+      window.clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = null;
+    }
     loadLibrary();
   }, [loadLibrary]);
 
@@ -232,6 +386,14 @@ export default function ReelHouseApp() {
     loadLibrary(controller.signal);
     return () => controller.abort();
   }, [loadLibrary]);
+
+  useEffect(() => () => {
+    unmountedRef.current = true;
+    if (reconnectTimer.current !== null) window.clearTimeout(reconnectTimer.current);
+    if (pollTimer.current !== null) window.clearTimeout(pollTimer.current);
+    if (recoveryTimer.current !== null) window.clearTimeout(recoveryTimer.current);
+    libraryAbort.current?.abort();
+  }, []);
 
   const resetSearchState = useCallback(() => {
     setSearchStatus("idle");
@@ -415,8 +577,13 @@ export default function ReelHouseApp() {
           )}
         </section>
       ) : <>
-        {libraryError && <div className="library-banner page-gutter" role="alert">
-          <span>Couldn’t reach the ReelHouse API — showing demo titles.</span>
+        {(enginePhase === "unavailable" || enginePhase === "stale") && <div className={`library-banner page-gutter${enginePhase === "stale" ? " stale" : ""}`} role="alert">
+          <span>
+            {enginePhase === "stale"
+              ? "Lost connection to the ReelHouse API — showing the last synced library."
+              : "Couldn’t reach the ReelHouse API — showing demo titles."}
+            {engineNotice ? ` (${engineNotice})` : ""}
+          </span>
           <button onClick={retryLibrary}>Retry</button>
         </div>}
         <section className="hero">
@@ -440,18 +607,19 @@ export default function ReelHouseApp() {
           </div>
         </section>
 
-        <div className="content-rail" aria-busy={libraryLoading}>
+        <div className="content-rail" aria-busy={enginePhase === "connecting"}>
           <div
-            className={`source-chip${library.degraded ? " degraded" : ""}${libraryLoading ? " connecting" : ""}`}
+            className={`source-chip${enginePhase === "unavailable" ? " degraded" : ""}${enginePhase === "stale" ? " stale" : ""}${enginePhase === "connecting" ? " connecting" : ""}${reconnected ? " recovered" : ""}`}
             role="status"
           >
-            {libraryLoading
-              ? <><span className="chip-dot" aria-hidden="true" />Connecting to ReelHouse Engine…</>
+            {enginePhase === "connecting" && <><span className="chip-dot" aria-hidden="true" />Connecting to ReelHouse Engine…</>}
+            {enginePhase === "ok" && (reconnected
+              ? <><span className="chip-dot" aria-hidden="true" />Reconnected to ReelHouse Engine</>
               : library.source === "jellyfin"
                 ? "● Connected to ReelHouse Engine"
-                : library.degraded
-                  ? "● ReelHouse Engine unreachable — demo titles shown"
-                  : "Demo library • connect Jellyfin to index your NAS"}
+                : "Demo library • connect Jellyfin to index your NAS")}
+            {enginePhase === "unavailable" && <>● ReelHouse Engine unreachable — demo titles shown{reconnectAttempt > 0 && <> · reconnecting (attempt {reconnectAttempt})…</>}</>}
+            {enginePhase === "stale" && <>● Connection lost — showing last synced titles{reconnectAttempt > 0 && <> · reconnecting (attempt {reconnectAttempt})…</>}</>}
           </div>
           {library.sections.map((section) => <section className="media-section" key={section.title}>
             <div className="section-heading page-gutter"><h2>{section.title}</h2><button>See all ›</button></div>

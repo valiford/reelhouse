@@ -25,6 +25,8 @@ export type LibraryPayload = {
   sections: LibrarySection[];
   /** True when Jellyfin was expected to serve this payload but fell back to demo data. */
   degraded?: boolean;
+  /** Bounded, redacted reason for the degraded fallback; safe to render in the UI. */
+  degradedReason?: string;
 };
 
 export type SearchPayload = {

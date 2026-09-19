@@ -1,6 +1,7 @@
 import type { LibraryPayload, MediaItem, SearchPayload } from "./types";
 import type { ListQuery } from "./list-query";
 import { demoLibrary } from "./demo";
+import { boundedMessage } from "./diag";
 
 const serverUrl = process.env.JELLYFIN_URL?.replace(/\/$/, "");
 const apiKey = process.env.JELLYFIN_API_KEY;
@@ -76,7 +77,15 @@ async function queryItems(params: Record<string, string>, signal?: AbortSignal):
     signal
   });
   if (!response.ok) throw new Error(`Jellyfin ${response.status}`);
-  const body = (await response.json()) as JellyfinResponse;
+  let body: JellyfinResponse;
+  try {
+    body = (await response.json()) as JellyfinResponse;
+  } catch {
+    throw new Error("Jellyfin returned malformed JSON.");
+  }
+  if (body.Items !== undefined && !Array.isArray(body.Items)) {
+    throw new Error("Jellyfin returned a malformed Items payload.");
+  }
   const items = (body.Items || []).map(mapItem);
   return { items, total: typeof body.TotalRecordCount === "number" ? body.TotalRecordCount : items.length };
 }
@@ -101,11 +110,15 @@ function demoSearchPayload(query: ListQuery): SearchPayload {
 }
 
 /** Apply the route's section filter and bounded limit to demo data too, so demo and live modes honor the same contract. */
-function shapeDemoPayload(options: { sections?: string[]; limit?: number }, degraded = false): LibraryPayload {
+function shapeDemoPayload(options: { sections?: string[]; limit?: number }, degraded = false, reason?: string): LibraryPayload {
   const sections = demoLibrary.sections
     .filter((section) => !options.sections || options.sections.includes(section.title))
     .map((section) => ({ ...section, items: options.limit ? section.items.slice(0, options.limit) : section.items }));
-  return { ...demoLibrary, sections, ...(degraded ? { degraded: true } : {}) };
+  return {
+    ...demoLibrary,
+    sections,
+    ...(degraded ? { degraded: true, ...(reason ? { degradedReason: boundedMessage(reason) } : {}) } : {})
+  };
 }
 
 export async function getLibrary(options: {
@@ -145,7 +158,7 @@ export async function getLibrary(options: {
   } catch (error) {
     if (isAbortError(error)) throw error;
     console.error("Falling back to demo library:", error);
-    return shapeDemoPayload(options, true);
+    return shapeDemoPayload(options, true, error instanceof Error ? error.message : "upstream request failed");
   }
 }
 
