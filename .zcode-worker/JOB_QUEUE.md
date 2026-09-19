@@ -6,6 +6,13 @@ The highest-priority READY job with satisfied dependencies and `AUTOMATION_ELIGI
 
 | Priority | Job ID | Status | Agent | Description |
 |---:|---|---|---|---|
+| 1 | RH-0015 | READY | ZCODE | Real Synology PostgreSQL 18 ReelHouse connection and migration smoke |
+| 2 | RH-0016 | READY | ZCODE | Jellyfin to PostgreSQL media_catalog synchronization |
+| 3 | RH-0017 | READY | ZCODE | Household profiles preferences and watch-state persistence |
+| 4 | RH-0018 | READY | ZCODE | Favorites watchlists collections and home-row persistence |
+| 5 | RH-0019 | READY | ZCODE | TV remote keyboard and living-room interaction overhaul |
+| 6 | RH-0020 | READY | ZCODE | Search library discovery and recommendation read-model enhancement |
+| 7 | RH-0021 | READY | ZCODE | PostgreSQL backup restore catalog rebuild and disaster recovery |
 | 1 | RH-0008 | READY | ZCODE | Next.js security upgrade and regression verification |
 | 2 | RH-0009 | READY | ZCODE | TV remote keyboard and focus-navigation shell |
 | 3 | RH-0010 | READY | ZCODE | Search filtering pagination and bounded-result contract |
