@@ -46,10 +46,10 @@ A private, household media interface for Synology NAS users. ReelHouse uses Jell
 ## TV strategy
 
 ### Immediately
-Use a smart-TV browser for ReelHouse, or a standard Jellyfin TV client for direct playback.
+ReelHouse ships a built-in TV remote mode: arrow keys drive spatial focus across the top bar, hero, rails, search, and detail modal; Enter activates; Back/Escape (including webOS 461, Tizen GoBack, and Fire TV 10009 key codes) closes the topmost layer; focus rings appear only while navigating by remote/keyboard. Large living-room displays pick up a denser 10-foot layout automatically. Use a smart-TV browser for ReelHouse, or a standard Jellyfin TV client for direct playback.
 
 ### Next
-Add a proper TV remote/focus mode and installable PWA.
+Add an installable PWA, fullscreen TV player, and inactivity handling.
 
 ### Later
 Build thin clients for Android TV / Fire TV first, then Apple TV / Roku / Samsung / LG as needed. All clients use the same ReelHouse/Jellyfin backend.
@@ -77,13 +77,17 @@ env vars are unset:
 npm install
 npm run lint
 npm run typecheck
+npm run test
 npm run build && npm start
 ```
 
-Then check `GET /` (app shell), `GET /api/library`, and
-`GET /api/search?q=`. See [docs/BASELINE.md](docs/BASELINE.md) for the
-full imported-source baseline: deployment mapping, data authorities,
-and the PostgreSQL 18 migration surface.
+`npm run test` runs the deterministic vitest suite (spatial navigation
+engine, TV interaction shell, and search-results resilience paths) with
+no network or credentials required. Then check `GET /` (app shell),
+`GET /api/library`, and `GET /api/search?q=`. See
+[docs/BASELINE.md](docs/BASELINE.md) for the full imported-source
+baseline: deployment mapping, data authorities, and the PostgreSQL 18
+migration surface.
 
 ## Security note
 
