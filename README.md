@@ -106,6 +106,24 @@ verification, and rollback/recovery policy, and
 [docs/DB_SMOKE.md](docs/DB_SMOKE.md) for the end-to-end smoke runbook
 (including the pre-acceptance gate for the production Synology database).
 
+## Media catalog sync
+
+The separate `media_catalog` PostgreSQL 18 database mirrors Jellyfin
+library metadata through the Jellyfin API (never its internal database):
+
+```bash
+npm run catalog:migrate          # apply catalog migrations (MEDIA_CATALOG_DATABASE_URL)
+npm run catalog:sync             # incremental scan
+npm run catalog:sync:full        # full scan; computes non-destructive retirement
+npm run catalog:rebuild          # wipe catalog content and rebuild from Jellyfin
+```
+
+Identity, provenance, freshness, quarantine of ambiguous identities, and
+the retirement policy are documented in
+[docs/CATALOG_SYNC.md](docs/CATALOG_SYNC.md). The sync fails closed on
+missing credentials and never writes to Jellyfin or to the `reelhouse`
+database.
+
 ## Security note
 
 Media is mounted read-only. Do not expose ports 8096 or 3210 directly to the public Internet. Use a VPN such as Tailscale for remote access.

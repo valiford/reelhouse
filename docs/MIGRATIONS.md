@@ -4,6 +4,10 @@ How the `reelhouse` PostgreSQL 18 database schema is defined, applied, and
 recovered. The migration system is **forward-only**: schema history is
 append-only and verifiable, never rewritten.
 
+> The separate `media_catalog` database uses the same runner with its own
+> history (`db/migrations-catalog/`, `npm run catalog:migrate`); see
+> [CATALOG_SYNC.md](CATALOG_SYNC.md).
+
 ## Layout
 
 ```
