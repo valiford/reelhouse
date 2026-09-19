@@ -21,6 +21,8 @@ which set `WAVE: Tomorrow priority` on RH-0019 — today. Worktree
 
 ## Commits on the branch
 
+Implementation (base `origin/main` @ `9028194`):
+
 1. `f4135f7` — Deterministic TV spatial navigation engine + test harness:
    pure geometric candidate picker (`src/lib/spatial.ts`), DOM adapter
    with vendor back-key detection (Escape/GoBack/BrowserBack, webOS 461,
@@ -37,15 +39,35 @@ which set `WAVE: Tomorrow priority` on RH-0019 — today. Worktree
    (`aria-live`) + `aria-busy`; keyboard-only focus rings; modal/panel
    entrance transitions with reduced-motion kills; 1600/2200px 10-foot
    density tiers; full component regression matrix.
-3. *(this commit)* — README TV-strategy and verification updates, job
-   spec → REVIEW, queue updated, this report.
+3. `aa197cc` — README TV-strategy and verification updates, job
+   spec → REVIEW, queue updated, report.
+
+Integration merges (per the rh-0015/rh-0016 worker precedent — a REVIEW
+branch carries the chain it builds on):
+
+4. `69fdc9b` — Integrate `origin/rh-0009` (focus-navigation shell).
+   Byte-identical files (`spatial.ts`, `tvnav.ts`, `vitest.config.ts`,
+   `vitest.setup.ts`, `spatial.test.ts`, `package.json` scripts/deps)
+   merged clean; hook + component + CSS resolved to the overhaul
+   supersets; carries RH-0009's route tests, `docs/TV_NAVIGATION.md`,
+   spec REVIEW marker, and report.
+5. `99c6200` — Integrate `origin/rh-0011` (which carries `rh-0010`).
+   Union component: their bounded search contract (request-seq
+   stale-guard, kind filter chips, load-more pagination, PosterImage
+   fallback, degraded/connecting chips, error/retry states) + the
+   overhaul's TV layer. `uniqueById` guards the first results page;
+   bounded redacted warnings added to both fetch paths; their
+   `ReelHouseApp.test.tsx` joins the suite with ONE locator adapted
+   (`"Toggle search"` → `"Search"`, the shell's a11y name); their route
+   tests supersede RH-0009's (new bounded contract); vitest config kept
+   jsdom+setup (their jsdom-per-file pragma is compatible).
 
 ## Acceptance criteria
 
 | Criterion | Result |
 |---|---|
-| Deterministic tests cover success + stale/duplicate/failure/recovery paths | ✅ 42 tests: stale out-of-order responses ignored (cancelled-flag guard), duplicate results deduped, search/library failure paths bounded, recovery on next query, spatial edge/tie/phantom determinism |
-| Build/lint/typecheck suites remain green | ✅ `eslint .` clean, `tsc --noEmit` clean, `next build` succeeds (`○ /`, `ƒ /api/library`, `ƒ /api/search`) |
+| Deterministic tests cover success + stale/duplicate/failure/recovery paths | ✅ 86 tests across 9 files: stale out-of-order responses ignored (request-seq guard), duplicate results deduped, search/library failure paths bounded with explicit retry UI, recovery on next query, spatial edge/tie/phantom determinism, bounded search contract (RH-0010's suites carried) |
+| Build/lint/typecheck suites remain green | ✅ `eslint .` clean, `tsc --noEmit` clean, `next build` succeeds (`○ /`, `ƒ /api/library`, `ƒ /api/search`) — re-run after each integration merge |
 | Diagnostics bounded and redacted | ✅ `boundedMessage`: 200-char cap, status-only messages generated client-side; household query strings/URLs never enter logs (pinned by exact-call test assertions) |
 | Data boundaries preserved | ✅ Jellyfin untouched; no DB coupling; demo fallback intact; no secrets in source |
 | No merge/deploy/release | ✅ Local build + localhost smoke only |
@@ -53,22 +75,28 @@ which set `WAVE: Tomorrow priority` on RH-0019 — today. Worktree
 ## Verification evidence (2026-09-19, Node 22.19.0 / npm 10.9.3)
 
 - `npm run lint` — clean. `npm run typecheck` — clean.
-- `npm run test` — **42 passed (5 files)**: spatial engine (8), tvnav
-  DOM layer (13), component interaction matrix (14), uniqueById (2),
-  boundedMessage (5).
-- `npm run build` — succeeds; production server smoke on :3219.
-- Browser verification (ZCode IAB pane, 1920×1080 and 2560×1440):
-  arrow keys walk top bar → hero → rails with correct aligned-column
-  targeting; `data-kbd-nav` set on first key and cleared on pointer;
-  card focus reveals off-screen rails; details modal opens with focus
-  on the primary action (Watchlist fallback for demo items), traps Tab,
-  animates in (`rh-modal-in` computed), closes on Escape/Back with focus
-  restored to the invoking card; search autofocuses, announces "N
-  matches" live, Enter commits focus into the first result, Back closes
-  and restores the toggle; density tiers engage quantitatively (primary
-  buttons 46→58→68px, cards 230→300→380px caps, topbar 74→92→108px);
-  focus-ring selectors confirmed present in the built stylesheet and
-  rendering verified via computed `box-shadow` (gold 2–3px ring).
+- `npm run test` — **86 passed (9 files)** on the fully integrated
+  branch: spatial engine (8), tvnav DOM layer (13), component TV
+  matrix (14), uniqueById (2), boundedMessage (5), RH-0009 route
+  tests superseded by RH-0010's bounded-contract route tests, RH-0010/
+  0011 component suites (search states, filters, load-more, degraded
+  chip, poster fallback, hero crossfade).
+- `npm run build` — succeeds; production server smoke on :3219 re-run
+  on the integrated branch.
+- Browser verification (ZCode IAB pane, 1920×1080 and 2560×1440),
+  repeated on the final integrated build: arrow keys walk top bar →
+  hero → rails with correct aligned-column targeting; `data-kbd-nav`
+  set on first key and cleared on pointer; card focus reveals
+  off-screen rails; details modal opens with focus on the primary
+  action (Watchlist fallback for demo items), traps Tab, animates in
+  (`rh-modal-in` computed), closes on Escape/Back with focus restored
+  to the invoker; search autofocuses, renders the kind-filter toolbar,
+  announces "N matches" live, Enter commits focus into the first
+  result, Back closes and restores the toggle; density tiers engage
+  quantitatively (primary buttons 46→58→68px, cards 230→300→380px
+  caps, topbar 74→92→108px); focus-ring selectors confirmed in the
+  built stylesheet, rendering verified via computed `box-shadow`
+  (gold 2–3px ring).
 
 ## Environment limitation found during browser verification
 
@@ -82,41 +110,47 @@ paths are covered by the jsdom suite (initial focus, ring selectors,
 activation via the same click handler native Enter dispatches). Recorded
 here for the reviewer's context; no code change made.
 
-## Overlap disclosure for the controller (RH-0009)
+## Integration status (rh-0009 / rh-0010 / rh-0011)
 
-RH-0009 ("TV remote keyboard and focus-navigation shell", in REVIEW,
-unmerged) targets the same surface. This branch was therefore built as a
-**deliberate superset** to make integration mechanical:
+This branch now **contains** the full leased frontend chain:
+`rh-0009` (shell, merged at `69fdc9b`) and `rh-0011` carrying `rh-0010`
+(merged at `99c6200`) — the same pattern rh-0015/rh-0016 established
+for the backend wave. Recommended acceptance order collapses to:
 
-- `src/lib/spatial.ts`, `src/lib/tvnav.ts`, `vitest.config.ts`,
-  `vitest.setup.ts`, `src/lib/spatial.test.ts` are **byte-identical** to
-  RH-0009's versions — identical blobs merge cleanly regardless of order.
-- `useTvNavigation.ts` adds an optional `onEnterInText` (shell behavior
-  unchanged when omitted); `ReelHouseApp.tsx` and `globals.css` contain
-  all shell behaviors plus the overhaul delta; component/unit tests
-  subsume the shell's cases.
-- Suggested integration: apply RH-0009 first, then resolve any
-  add/add/content conflict toward this branch (superset). Applying this
-  branch first also works; RH-0009's diff then reduces to near-no-op.
+- **Merge this branch; it supersedes rh-0009 + rh-0010 + rh-0011
+  content-wise** (their commits are ancestors of this branch, so the
+  controller can merge rh-0009 → rh-0010 → rh-0011 → rh-0019 in queue
+  order and the last merge is a fast-forward of already-integrated
+  history), or merge them in any order — all conflicts were resolved
+  here.
+- Post-merge dedupe check: rh-0010's independent vitest toolchain and
+  RH-0009's were unified to one config (jsdom + setup, per-file pragma
+  compatible); `package.json` devDeps are the union (adds
+  @testing-library/user-event).
 
 ## Findings the controller should see
 
 1. `npm install` for the dev-only test toolchain (vitest 5, jsdom 29,
    @testing-library, @vitejs/plugin-react — version ranges identical to
-   RH-0009's) prints existing `npm audit` notices; all are in dev
-   dependencies, non-blocking, and RH-0008 owns the security pass.
-2. The stale-response guard (cancelled-flag around the debounced search
-   setState chain) fixes a real race the abort signal alone does not
-   cover (a response already in flight when the query changes).
+   RH-0009's, plus @testing-library/user-event from rh-0010) prints
+   existing `npm audit` notices; all are in dev dependencies,
+   non-blocking, and RH-0008 owns the security pass.
+2. Stale-response handling: RH-0010's request-seq guard (carried) and
+   this job's cancelled-flag covered the same race two ways; the union
+   keeps the seq guard as the single mechanism, with client-side
+   `uniqueById` on the first page as a defensive duplicate guard on top
+   of the route-level id-dedup.
 3. Client fetch diagnostics intentionally carry HTTP status only — never
    URLs or query text (household search terms are treated as private).
 4. RH-0012 (degraded-mode UX) remains the right home for explicit
-   Jellyfin unavailable/reconnecting states; this job only hardened the
-   silent demo-fallback path.
+   Jellyfin unavailable/reconnecting states; the carried degraded chip
+   and this job's bounded demo-fallback logging are stopgaps, not the
+   full UX.
 
 ## Handoff
 
-Upon acceptance: merge per the controller's frontend order (RH-0009
-shell before this overhaul recommended; see overlap disclosure). Six
-genuinely unclaimed READY jobs remain (RH-0012/0013/0014/0020/0021 plus
-RH-0004 unless retired as an RH-0016 duplicate).
+Upon acceptance: merge rh-0009 → rh-0010 → rh-0011 → rh-0019 in queue
+order (or merge this branch last as the integration carrier — see
+Integration status). Six genuinely unclaimed READY jobs remain
+(RH-0012/0013/0014/0020/0021 plus RH-0004 unless retired as an RH-0016
+duplicate).
