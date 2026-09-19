@@ -565,7 +565,10 @@ describe("mutated history refusal", () => {
       async (dir) => {
         // Drop the NEWEST applied migration so the local tree stays
         // contiguous but the recorded history has a file it cannot find.
-        await rm(join(dir, "0009_sync_cursors_and_idempotency.sql"));
+        // Computed from the tree so this keeps working as migrations extend.
+        const local = await loadMigrationFiles(MIGRATIONS_DIR);
+        const newest = local.reduce((a, b) => (b.version > a.version ? b : a));
+        await rm(join(dir, newest.name));
       },
       async (dir) => {
         await assert.rejects(
