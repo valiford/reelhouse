@@ -13,7 +13,6 @@ The highest-priority READY job with satisfied dependencies and `AUTOMATION_ELIGI
 | 6 | RH-0020 | READY | ZCODE | Search library discovery and recommendation read-model enhancement |
 | 7 | RH-0021 | READY | ZCODE | PostgreSQL backup restore catalog rebuild and disaster recovery |
 | 1 | RH-0008 | READY | ZCODE | Next.js security upgrade and regression verification |
-| 2 | RH-0009 | READY | ZCODE | TV remote keyboard and focus-navigation shell |
 | 3 | RH-0010 | READY | ZCODE | Search filtering pagination and bounded-result contract |
 | 4 | RH-0011 | READY | ZCODE | Responsive home library presentation and poster fallback pass |
 | 5 | RH-0012 | READY | ZCODE | Jellyfin degraded-mode and reconnection UX |
@@ -39,7 +38,8 @@ _None._
 
 | Priority | Job ID | Status | Agent | Description |
 |---:|---|---|---|---|
-| 5 | RH-0019 | REVIEW | ZCODE | TV remote keyboard and living-room interaction overhaul (`rh-0019-tv-remote-keyboard-and-living-room-interaction-overhaul`) |
+| 2 | RH-0009 | REVIEW | ZCODE | TV remote keyboard and focus-navigation shell (`rh-0009-tv-remote-keyboard-and-focus-navigation-shell`) |
+| 5 | RH-0019 | REVIEW | ZCODE | TV remote keyboard and living-room interaction overhaul (`rh-0019-tv-remote-keyboard-and-living-room-interaction-overhaul`; integrates rh-0009 shell) |
 
 ## Completed / Integrated
 

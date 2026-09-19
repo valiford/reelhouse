@@ -51,6 +51,16 @@ ReelHouse ships a built-in TV remote mode: arrow keys drive spatial focus across
 ### Next
 Add an installable PWA, fullscreen TV player, and inactivity handling.
 
+### Now included: remote keyboard and focus navigation
+
+The web UI is remote-first: arrow keys drive spatial focus across the
+topbar, hero, rails, cards, search, and detail modal; Enter/OK
+activates; Escape/Back closes the topmost layer (modal → search →
+profile menu) and never leaves the app; focus rings appear only while
+keyboard/remote navigation is active. See
+[docs/TV_NAVIGATION.md](docs/TV_NAVIGATION.md) for the key map, focus
+rules, and test coverage.
+
 ### Later
 Build thin clients for Android TV / Fire TV first, then Apple TV / Roku / Samsung / LG as needed. All clients use the same ReelHouse/Jellyfin backend.
 
@@ -64,7 +74,7 @@ Build thin clients for Android TV / Fire TV first, then Apple TV / Roku / Samsun
 6. Media-health dashboard (duplicates, broken files, missing posters, codec compatibility).
 7. Synology-aware hardware-transcoding setup wizard.
 8. Optional AI semantic search over household video metadata, e.g. “show our Santorini sunset videos.”
-9. TV remote navigation and 10-foot UI.
+9. TV remote navigation and 10-foot UI. *(focus-navigation shell shipped; player and PWA pending)*
 10. Optional remote access without exposing the NAS directly.
 
 ## Development & verification
