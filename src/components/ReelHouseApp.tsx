@@ -1,8 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryPayload, MediaItem } from "@/lib/types";
 import { demoLibrary } from "@/lib/demo";
+import { focusInitialIn, moveFocus, reveal } from "@/lib/tvnav";
+import { uniqueById } from "@/lib/uniqueById";
+import { boundedMessage } from "@/lib/diag";
+import { useTvNavigation } from "@/hooks/useTvNavigation";
 import { HomeIcon, InfoIcon, PlayIcon, SearchIcon } from "./icons";
 
 const profiles = [
@@ -12,7 +16,12 @@ const profiles = [
 
 function Card({ item, onOpen }: { item: MediaItem; onOpen: (item: MediaItem) => void }) {
   return (
-    <button className="media-card" onClick={() => onOpen(item)} aria-label={`Open ${item.title}`}>
+    <button
+      className="media-card"
+      onClick={() => onOpen(item)}
+      onFocus={(e) => reveal(e.currentTarget)}
+      aria-label={`Open ${item.title}`}
+    >
       <div className="poster" style={item.imageUrl ? { backgroundImage: `url(${item.imageUrl})` } : undefined}>
         {!item.imageUrl && <span>{item.title.slice(0, 1)}</span>}
         <div className="card-gradient" />
@@ -29,24 +38,39 @@ function Card({ item, onOpen }: { item: MediaItem; onOpen: (item: MediaItem) => 
 }
 
 function Details({ item, onClose }: { item: MediaItem; onClose: () => void }) {
+  const shellRef = useRef<HTMLDivElement>(null);
   const jellyfinUrl = process.env.NEXT_PUBLIC_JELLYFIN_URL || "http://localhost:8096";
   const target = item.id.startsWith("demo-") ? undefined : `${jellyfinUrl}/web/index.html#!/details?id=${encodeURIComponent(item.id)}`;
+
+  useEffect(() => {
+    const invoker = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (shellRef.current) focusInitialIn(shellRef.current);
+    return () => {
+      if (invoker && invoker.isConnected) {
+        invoker.focus({ preventScroll: true });
+        reveal(invoker);
+      }
+    };
+  }, [item.id]);
+
   return (
-    <div className="modal-shell" role="dialog" aria-modal="true" onMouseDown={onClose}>
+    <div className="modal-shell" ref={shellRef} data-focus-scope role="dialog" aria-modal="true" aria-labelledby="details-title" onMouseDown={onClose}>
       <section className="details-modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="details-backdrop" style={item.backdropUrl ? { backgroundImage: `url(${item.backdropUrl})` } : undefined} />
-        <button className="close" onClick={onClose}>×</button>
+        <button className="close" onClick={onClose} aria-label="Close details">×</button>
         <div className="details-copy">
           <p className="eyebrow">{item.kind} {item.year ? `• ${item.year}` : ""}</p>
-          <h2>{item.title}</h2>
+          <h2 id="details-title">{item.title}</h2>
           <div className="metadata">
             {item.rating && <span>★ {item.rating.toFixed(1)}</span>}
             {(item.genres || []).slice(0, 3).map((genre) => <span key={genre}>{genre}</span>)}
           </div>
           <p>{item.overview || "Metadata will appear here after ReelHouse connects to your Jellyfin library."}</p>
           <div className="detail-actions">
-            {target ? <a className="primary-button" href={target}><PlayIcon /> Play in ReelHouse Engine</a> : <button className="primary-button" disabled><PlayIcon /> Demo item</button>}
-            <button className="secondary-button">＋ Watchlist</button>
+            {target
+              ? <a className="primary-button" href={target} data-autofocus><PlayIcon /> Play in ReelHouse Engine</a>
+              : <button className="primary-button" disabled><PlayIcon /> Demo item</button>}
+            <button className="secondary-button" data-autofocus={!target}>＋ Watchlist</button>
           </div>
         </div>
       </section>
@@ -59,24 +83,117 @@ export default function ReelHouseApp() {
   const [activeProfile, setActiveProfile] = useState(profiles[0]);
   const [selected, setSelected] = useState<MediaItem | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [searchItems, setSearchItems] = useState<MediaItem[]>([]);
+  const [searchBusy, setSearchBusy] = useState(false);
+
+  const homeRef = useRef<HTMLButtonElement>(null);
+  const searchToggleRef = useRef<HTMLButtonElement>(null);
+  const profilePillRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    fetch("/api/library").then((r) => r.json()).then(setLibrary).catch(() => undefined);
+    let cancelled = false;
+    fetch("/api/library")
+      .then((r) => {
+        if (!r.ok) throw new Error(`library HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((payload: LibraryPayload) => {
+        if (!cancelled) setLibrary(payload);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) console.warn("[reelhouse] library unavailable, showing demo:", boundedMessage(error));
+      });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
     const controller = new AbortController();
+    // Stale responses from an abandoned query must never land: both the
+    // abort signal and this flag gate every setState below.
+    let cancelled = false;
     const timer = window.setTimeout(() => {
-      if (!search.trim()) return setSearchItems([]);
-      fetch(`/api/search?q=${encodeURIComponent(search)}`, { signal: controller.signal })
-        .then((r) => r.json())
-        .then((x) => setSearchItems(x.items || []))
-        .catch(() => undefined);
+      const q = search.trim();
+      if (!q) {
+        setSearchItems([]);
+        setSearchBusy(false);
+        return;
+      }
+      setSearchBusy(true);
+      fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: controller.signal })
+        .then((r) => {
+          if (!r.ok) throw new Error(`search HTTP ${r.status}`);
+          return r.json();
+        })
+        .then((x: { items?: MediaItem[] }) => {
+          if (cancelled) return;
+          setSearchItems(uniqueById(x.items || []));
+        })
+        .catch((error: unknown) => {
+          if (!cancelled) console.warn("[reelhouse] search failed:", boundedMessage(error));
+        })
+        .finally(() => {
+          if (!cancelled) setSearchBusy(false);
+        });
     }, 220);
-    return () => { controller.abort(); window.clearTimeout(timer); };
+    return () => { cancelled = true; controller.abort(); window.clearTimeout(timer); };
   }, [search]);
+
+  useEffect(() => {
+    if (!profileOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!(e.target instanceof Element) || !e.target.closest(".profile-switcher")) setProfileOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [profileOpen]);
+
+  const searchResults = useMemo(() => uniqueById(searchItems), [searchItems]);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearch("");
+    setSearchItems([]);
+    setSearchBusy(false);
+    searchToggleRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  // Back pops the topmost layer only; on home it is a no-op so a stray
+  // remote key never leaves the app.
+  const handleBack = useCallback((): boolean => {
+    if (selected) {
+      setSelected(null);
+      return true;
+    }
+    if (searchOpen) {
+      closeSearch();
+      return true;
+    }
+    if (profileOpen) {
+      setProfileOpen(false);
+      profilePillRef.current?.focus({ preventScroll: true });
+      return true;
+    }
+    return false;
+  }, [selected, searchOpen, profileOpen, closeSearch]);
+
+  // Enter in the search field commits the query: focus steps into the
+  // first result so browsing continues without a pointer.
+  const commitSearch = useCallback((): boolean => {
+    if (!searchOpen || !searchResults.length) return false;
+    return moveFocus("down");
+  }, [searchOpen, searchResults]);
+
+  useTvNavigation({ onBack: handleBack, onEnterInText: commitSearch });
+
+  // Deterministic TV entry point: focus lands on Home once per mount
+  // when nothing else holds focus.
+  useEffect(() => {
+    if (document.activeElement === document.body || !document.activeElement) {
+      homeRef.current?.focus({ preventScroll: true });
+    }
+  }, []);
 
   const heroStyle = useMemo(() => library.hero.backdropUrl ? { backgroundImage: `url(${library.hero.backdropUrl})` } : undefined, [library.hero]);
 
@@ -84,30 +201,52 @@ export default function ReelHouseApp() {
     <main>
       <header className="topbar">
         <div className="brand"><span className="brand-mark">R</span><span>REELHOUSE</span></div>
-        <nav className="nav-links">
-          <button className="active"><HomeIcon /> Home</button>
-          <button>Movies</button><button>Shows</button><button>Home Videos</button>
+        <nav className="nav-links" aria-label="Primary">
+          <button className="active" ref={homeRef} onFocus={(e) => reveal(e.currentTarget)}><HomeIcon /> Home</button>
+          <button onFocus={(e) => reveal(e.currentTarget)}>Movies</button>
+          <button onFocus={(e) => reveal(e.currentTarget)}>Shows</button>
+          <button onFocus={(e) => reveal(e.currentTarget)}>Home Videos</button>
         </nav>
         <div className="top-actions">
-          <button className="icon-button" onClick={() => setSearchOpen((v) => !v)}><SearchIcon /></button>
+          <button
+            className="icon-button"
+            ref={searchToggleRef}
+            aria-label="Search"
+            aria-expanded={searchOpen}
+            aria-controls="reelhouse-search"
+            onClick={() => (searchOpen ? closeSearch() : setSearchOpen(true))}
+          ><SearchIcon /></button>
           <div className="profile-switcher">
-            <button className="profile-pill"><span>{activeProfile.initials}</span>{activeProfile.name}</button>
-            <div className="profile-menu">
-              {profiles.map((p) => <button key={p.name} onClick={() => setActiveProfile(p)}><span>{p.initials}</span>{p.name}</button>)}
+            <button
+              className="profile-pill"
+              ref={profilePillRef}
+              aria-haspopup="true"
+              aria-expanded={profileOpen}
+              onClick={() => setProfileOpen((v) => !v)}
+            ><span>{activeProfile.initials}</span>{activeProfile.name}</button>
+            <div className={profileOpen ? "profile-menu open" : "profile-menu"}>
+              {profiles.map((p) => (
+                <button key={p.name} onClick={() => { setActiveProfile(p); setProfileOpen(false); profilePillRef.current?.focus({ preventScroll: true }); }}>
+                  <span>{p.initials}</span>{p.name}
+                </button>
+              ))}
             </div>
           </div>
         </div>
       </header>
 
-      {searchOpen && <section className="search-panel">
-        <SearchIcon /><input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search movies, shows, home videos…" />
+      {searchOpen && <section className="search-panel" id="reelhouse-search" aria-label="Search library">
+        <SearchIcon /><input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search movies, shows, home videos…" aria-label="Search movies, shows, and home videos" />
         {search && <button onClick={() => setSearch("")}>Clear</button>}
       </section>}
 
       {searchOpen && search.trim() ? (
-        <section className="search-results page-gutter">
-          <div className="section-heading"><h2>Search results</h2><span>{searchItems.length} matches</span></div>
-          <div className="poster-grid">{searchItems.map((item) => <Card key={item.id} item={item} onOpen={setSelected} />)}</div>
+        <section className="search-results page-gutter" aria-busy={searchBusy}>
+          <div className="section-heading">
+            <h2>Search results</h2>
+            <span aria-live="polite">{searchBusy ? "Searching…" : `${searchResults.length} matches`}</span>
+          </div>
+          <div className="poster-grid">{searchResults.map((item) => <Card key={item.id} item={item} onOpen={setSelected} />)}</div>
         </section>
       ) : <>
         <section className="hero" style={heroStyle}>
