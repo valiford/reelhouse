@@ -124,6 +124,18 @@ the retirement policy are documented in
 missing credentials and never writes to Jellyfin or to the `reelhouse`
 database.
 
+## Household state API
+
+Favorites, watchlists, curated collections, and home-screen row
+configuration persist to the `reelhouse` database and are served through
+`/api/favorites`, `/api/watchlists`, `/api/collections`, and
+`/api/home-rows`. Every operation is scoped to a household profile
+(isolation is enforced in SQL, and foreign rows read as 404), and every
+mutation is idempotent: natural idempotency from unique keys, plus optional
+`Idempotency-Key` replay protection that returns the original response
+byte-for-byte. The endpoint reference, semantics, error codes, and bounds
+are documented in [docs/HOUSEHOLD_STATE.md](docs/HOUSEHOLD_STATE.md).
+
 ## Security note
 
 Media is mounted read-only. Do not expose ports 8096 or 3210 directly to the public Internet. Use a VPN such as Tailscale for remote access.
