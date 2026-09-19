@@ -1,6 +1,6 @@
 # RH-0011 — Responsive home library presentation and poster fallback pass
 
-**STATUS:** READY
+**STATUS:** REVIEW
 **AGENT:** ZCODE
 **AUTOMATION_ELIGIBLE:** true
 
