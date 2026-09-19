@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ReelHouseApp from "./ReelHouseApp";
 import { demoLibrary } from "@/lib/demo";
-import type { MediaItem } from "@/lib/types";
+import type { MediaItem, SearchPayload } from "@/lib/types";
 
 function rect(el: Element, x: number, y: number, w = 200, h = 300) {
   el.setAttribute("data-rect", `${x},${y},${w},${h}`);
@@ -12,15 +12,28 @@ function jsonResponse(body: unknown) {
   return { ok: true, json: async () => body } as unknown as Response;
 }
 
+function isApi(input: RequestInfo | URL, path: string) {
+  const [route] = String(input).split("?");
+  return route === path;
+}
+
+function queryParams(input: RequestInfo | URL) {
+  const parts = String(input).split("?");
+  return new URLSearchParams(parts[1] || "");
+}
+
+function searchPayload(items: MediaItem[], total = items.length): SearchPayload {
+  return { source: "demo", query: "q", items, total, limit: 24, offset: 0 };
+}
+
 const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-  const url = String(input);
-  if (url.includes("/api/search")) {
-    const q = decodeURIComponent(url.split("q=")[1] || "").toLowerCase();
+  if (isApi(input, "/api/search")) {
+    const q = (queryParams(input).get("q") || "").toLowerCase();
     const items = demoLibrary.sections
       .flatMap((s) => s.items)
       .filter((item, i, all) => all.findIndex((y) => y.id === item.id) === i)
       .filter((item) => item.title.toLowerCase().includes(q));
-    return jsonResponse({ items });
+    return jsonResponse(searchPayload(items));
   }
   return jsonResponse(demoLibrary);
 });
@@ -207,7 +220,7 @@ describe("ReelHouseApp search results resilience", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(220); });
     expect(screen.getByText("Searching…")).toBeTruthy();
 
-    pending.resolve(jsonResponse({ items: [demoLibrary.sections[0].items[1]] }));
+    pending.resolve(jsonResponse(searchPayload([demoLibrary.sections[0].items[1]])));
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(screen.getByText("1 matches")).toBeTruthy();
   });
@@ -217,10 +230,10 @@ describe("ReelHouseApp search results resilience", () => {
     const fresh = deferred<Response>();
     const calls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes("/api/search")) {
-        calls.push(url);
-        return url.includes("q=a") && !url.includes("q=ab") ? stale.promise : fresh.promise;
+      if (isApi(input, "/api/search")) {
+        const q = queryParams(input).get("q") || "";
+        calls.push(q);
+        return q === "a" ? stale.promise : fresh.promise;
       }
       return jsonResponse(demoLibrary);
     }));
@@ -233,13 +246,13 @@ describe("ReelHouseApp search results resilience", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(220); });
     act(() => { fireEvent.change(input, { target: { value: "ab" } }); });
     await act(async () => { await vi.advanceTimersByTimeAsync(220); });
-    expect(calls).toHaveLength(2);
+    expect(calls).toEqual(["a", "ab"]);
 
     // The newer query answers first; the older, abandoned one lands last
     // and must not overwrite the results.
-    fresh.resolve(jsonResponse({ items: [{ id: "fresh-1", title: "Fresh Result", kind: "Movie" }] }));
+    fresh.resolve(jsonResponse(searchPayload([{ id: "fresh-1", title: "Fresh Result", kind: "Movie" }])));
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
-    stale.resolve(jsonResponse({ items: [{ id: "stale-1", title: "Stale Result", kind: "Movie" }] }));
+    stale.resolve(jsonResponse(searchPayload([{ id: "stale-1", title: "Stale Result", kind: "Movie" }])));
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
 
     expect(screen.getByRole("button", { name: "Open Fresh Result" })).toBeTruthy();
@@ -250,7 +263,9 @@ describe("ReelHouseApp search results resilience", () => {
   it("dedupes duplicate results from the source", async () => {
     const dupe: MediaItem = { id: "dupe-1", title: "Duplicated", kind: "Movie" };
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-      if (String(input).includes("/api/search")) return jsonResponse({ items: [dupe, { ...dupe }, dupe] });
+      if (isApi(input, "/api/search")) {
+        return jsonResponse(searchPayload([dupe, { ...dupe }, dupe], 1));
+      }
       return jsonResponse(demoLibrary);
     }));
 
@@ -267,9 +282,9 @@ describe("ReelHouseApp search results resilience", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     let failing = true;
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-      if (String(input).includes("/api/search")) {
-        if (failing) return { ok: false, status: 503 } as Response;
-        return jsonResponse({ items: [{ id: "ok-1", title: "Recovered", kind: "Movie" }] });
+      if (isApi(input, "/api/search")) {
+        if (failing) return { ok: false, status: 503, json: async () => null } as unknown as Response;
+        return jsonResponse(searchPayload([{ id: "ok-1", title: "Recovered", kind: "Movie" }]));
       }
       return jsonResponse(demoLibrary);
     }));
@@ -279,10 +294,11 @@ describe("ReelHouseApp search results resilience", () => {
 
     fireEvent.change(input, { target: { value: "secret-query" } });
     await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
-    expect(screen.getByText("0 matches")).toBeTruthy();
+    expect(screen.getByText("Search unavailable")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("Search failed (HTTP 503).");
     // The only variable content is the status we generated ourselves —
     // the household query and URL never enter the diagnostic.
-    expect(warn).toHaveBeenCalledWith("[reelhouse] search failed:", "search HTTP 503");
+    expect(warn).toHaveBeenCalledWith("[reelhouse] search failed:", "Search failed (HTTP 503).");
 
     failing = false;
     fireEvent.change(input, { target: { value: "recovered" } });
@@ -293,13 +309,13 @@ describe("ReelHouseApp search results resilience", () => {
   it("keeps the demo library when the library request fails", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-      if (String(input).includes("/api/library")) return { ok: false, status: 500 } as Response;
+      if (isApi(input, "/api/library")) return { ok: false, status: 500 } as Response;
       return jsonResponse(demoLibrary);
     }));
 
     render(<ReelHouseApp />);
     expect(await screen.findByText(/Demo library/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Play" })).toBeTruthy();
-    expect(warn).toHaveBeenCalledWith("[reelhouse] library unavailable, showing demo:", "library HTTP 500");
+    expect(warn).toHaveBeenCalledWith("[reelhouse] library unavailable, showing demo:", "Library failed (HTTP 500).");
   });
 });

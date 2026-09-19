@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { LibraryPayload, MediaItem } from "@/lib/types";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { LibraryPayload, MediaItem, MediaKind, SearchPayload } from "@/lib/types";
 import { demoLibrary } from "@/lib/demo";
 import { focusInitialIn, moveFocus, reveal } from "@/lib/tvnav";
 import { uniqueById } from "@/lib/uniqueById";
@@ -14,6 +14,53 @@ const profiles = [
   { name: "Nicole", initials: "NF" }
 ];
 
+const SEARCH_PAGE_SIZE = 24;
+
+const KIND_FILTERS: Array<{ label: string; value: "" | MediaKind }> = [
+  { label: "All", value: "" },
+  { label: "Movies", value: "Movie" },
+  { label: "Series", value: "Series" },
+  { label: "Episodes", value: "Episode" },
+  { label: "Videos", value: "Video" }
+];
+
+function PosterFallback({ title }: { title: string }) {
+  return <span className="poster-fallback" aria-hidden="true">{title.slice(0, 1)}</span>;
+}
+
+// Keyed by image URL at the call site: a payload swap that repoints an item's
+// art remounts this component and re-arms its load/error cycle.
+function PosterImage({ item }: { item: MediaItem }) {
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  // Server-rendered posters can finish (or fail) before hydration attaches
+  // onLoad/onError, so reconcile from the element itself when it attaches.
+  const attach = (img: HTMLImageElement | null) => {
+    if (!img || !img.complete) return;
+    if (img.naturalWidth > 0) setReady(true);
+    else setFailed(true);
+  };
+
+  if (failed) return <PosterFallback title={item.title} />;
+  return (
+    // Posters load directly from the household's Jellyfin host; routing them
+    // through the Next image optimizer is deferred to RH-0013.
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      ref={attach}
+      className={ready ? "poster-img is-ready" : "poster-img"}
+      src={item.imageUrl}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      draggable={false}
+      onLoad={() => setReady(true)}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 function Card({ item, onOpen }: { item: MediaItem; onOpen: (item: MediaItem) => void }) {
   return (
     <button
@@ -22,8 +69,8 @@ function Card({ item, onOpen }: { item: MediaItem; onOpen: (item: MediaItem) => 
       onFocus={(e) => reveal(e.currentTarget)}
       aria-label={`Open ${item.title}`}
     >
-      <div className="poster" style={item.imageUrl ? { backgroundImage: `url(${item.imageUrl})` } : undefined}>
-        {!item.imageUrl && <span>{item.title.slice(0, 1)}</span>}
+      <div className="poster">
+        {item.imageUrl ? <PosterImage key={item.imageUrl} item={item} /> : <PosterFallback title={item.title} />}
         <div className="card-gradient" />
         <div className="card-copy">
           <strong>{item.title}</strong>
@@ -57,7 +104,7 @@ function Details({ item, onClose }: { item: MediaItem; onClose: () => void }) {
     <div className="modal-shell" ref={shellRef} data-focus-scope role="dialog" aria-modal="true" aria-labelledby="details-title" onMouseDown={onClose}>
       <section className="details-modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="details-backdrop" style={item.backdropUrl ? { backgroundImage: `url(${item.backdropUrl})` } : undefined} />
-        <button className="close" onClick={onClose} aria-label="Close details">×</button>
+        <button className="close" aria-label="Close details" onClick={onClose}>×</button>
         <div className="details-copy">
           <p className="eyebrow">{item.kind} {item.year ? `• ${item.year}` : ""}</p>
           <h2 id="details-title">{item.title}</h2>
@@ -78,67 +125,150 @@ function Details({ item, onClose }: { item: MediaItem; onClose: () => void }) {
   );
 }
 
+function appendUnique(existing: MediaItem[], incoming: MediaItem[]): MediaItem[] {
+  const seen = new Set(existing.map((item) => item.id));
+  return [...existing, ...incoming.filter((item) => !seen.has(item.id))];
+}
+
+type SearchStatus = "idle" | "loading" | "ready" | "error";
+
 export default function ReelHouseApp() {
   const [library, setLibrary] = useState<LibraryPayload>(demoLibrary);
+  const [libraryError, setLibraryError] = useState(false);
+  const [libraryLoading, setLibraryLoading] = useState(true);
   const [activeProfile, setActiveProfile] = useState(profiles[0]);
   const [selected, setSelected] = useState<MediaItem | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [kindFilter, setKindFilter] = useState<"" | MediaKind>("");
+  const [searchStatus, setSearchStatus] = useState<SearchStatus>("idle");
   const [searchItems, setSearchItems] = useState<MediaItem[]>([]);
-  const [searchBusy, setSearchBusy] = useState(false);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [searchOffset, setSearchOffset] = useState(0);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const searchSeq = useRef(0);
+  const searchAbort = useRef<AbortController | null>(null);
 
   const homeRef = useRef<HTMLButtonElement>(null);
   const searchToggleRef = useRef<HTMLButtonElement>(null);
   const profilePillRef = useRef<HTMLButtonElement>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/library")
-      .then((r) => {
-        if (!r.ok) throw new Error(`library HTTP ${r.status}`);
-        return r.json();
+  const runSearch = useCallback((term: string, kind: "" | MediaKind, offset: number) => {
+    const requestId = ++searchSeq.current;
+    searchAbort.current?.abort();
+    const controller = new AbortController();
+    searchAbort.current = controller;
+
+    const params = new URLSearchParams({ q: term, limit: String(SEARCH_PAGE_SIZE), offset: String(offset) });
+    if (kind) params.set("kind", kind);
+    if (offset === 0) {
+      setSearchStatus("loading");
+      setSearchError(null);
+    } else {
+      setLoadingMore(true);
+    }
+
+    fetch(`/api/search?${params}`, { signal: controller.signal })
+      .then(async (response) => {
+        const body = await response.json().catch(() => null);
+        if (!response.ok) {
+          throw new Error(body?.error?.message || `Search failed (HTTP ${response.status}).`);
+        }
+        return body as SearchPayload;
       })
-      .then((payload: LibraryPayload) => {
-        if (!cancelled) setLibrary(payload);
+      .then((payload) => {
+        // Stale-response guard: only the most recently issued request may
+        // touch state, even if an aborted one resolves first.
+        if (requestId !== searchSeq.current) return;
+        setSearchTotal(payload.total);
+        setSearchOffset(payload.offset);
+        // First page is replaced wholesale; dedupe keeps a chatty source
+        // from rendering twin cards before its own contract does.
+        setSearchItems((prev) => payload.offset === 0 ? uniqueById(payload.items) : appendUnique(prev, payload.items));
+        setSearchError(null);
+        setSearchStatus("ready");
       })
       .catch((error: unknown) => {
-        if (!cancelled) console.warn("[reelhouse] library unavailable, showing demo:", boundedMessage(error));
+        if (controller.signal.aborted || requestId !== searchSeq.current) return;
+        console.warn("[reelhouse] search failed:", boundedMessage(error));
+        setSearchError(error instanceof Error ? error.message : "Search failed.");
+        setSearchStatus("error");
+      })
+      .finally(() => {
+        if (requestId === searchSeq.current) setLoadingMore(false);
       });
-    return () => { cancelled = true; };
   }, []);
+
+  const loadLibrary = useCallback((signal?: AbortSignal) => {
+    fetch("/api/library", { signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Library failed (HTTP ${response.status}).`);
+        return response.json() as Promise<LibraryPayload>;
+      })
+      .then((payload) => {
+        setLibrary(payload);
+        setLibraryError(false);
+      })
+      .catch((error: unknown) => {
+        if (signal?.aborted) return;
+        console.warn("[reelhouse] library unavailable, showing demo:", boundedMessage(error));
+        setLibraryError(true);
+      })
+      .finally(() => {
+        if (!signal?.aborted) setLibraryLoading(false);
+      });
+  }, []);
+
+  const retryLibrary = useCallback(() => {
+    setLibraryLoading(true);
+    loadLibrary();
+  }, [loadLibrary]);
 
   useEffect(() => {
     const controller = new AbortController();
-    // Stale responses from an abandoned query must never land: both the
-    // abort signal and this flag gate every setState below.
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      const q = search.trim();
-      if (!q) {
-        setSearchItems([]);
-        setSearchBusy(false);
-        return;
-      }
-      setSearchBusy(true);
-      fetch(`/api/search?q=${encodeURIComponent(q)}`, { signal: controller.signal })
-        .then((r) => {
-          if (!r.ok) throw new Error(`search HTTP ${r.status}`);
-          return r.json();
-        })
-        .then((x: { items?: MediaItem[] }) => {
-          if (cancelled) return;
-          setSearchItems(uniqueById(x.items || []));
-        })
-        .catch((error: unknown) => {
-          if (!cancelled) console.warn("[reelhouse] search failed:", boundedMessage(error));
-        })
-        .finally(() => {
-          if (!cancelled) setSearchBusy(false);
-        });
-    }, 220);
-    return () => { cancelled = true; controller.abort(); window.clearTimeout(timer); };
-  }, [search]);
+    loadLibrary(controller.signal);
+    return () => controller.abort();
+  }, [loadLibrary]);
+
+  const resetSearchState = useCallback(() => {
+    setSearchStatus("idle");
+    setSearchItems([]);
+    setSearchTotal(0);
+    setSearchOffset(0);
+    setSearchError(null);
+  }, []);
+
+  const handleSearchChange = useCallback((value: string) => {
+    setSearch(value);
+    if (!value.trim()) resetSearchState();
+  }, [resetSearchState]);
+
+  useEffect(() => {
+    const term = search.trim();
+    if (!term) {
+      searchSeq.current += 1;
+      searchAbort.current?.abort();
+      return;
+    }
+    const timer = window.setTimeout(() => runSearch(term, kindFilter, 0), 220);
+    return () => {
+      window.clearTimeout(timer);
+      searchAbort.current?.abort();
+    };
+  }, [search, kindFilter, runSearch]);
+
+  const retrySearch = useCallback(() => {
+    const term = search.trim();
+    if (term) runSearch(term, kindFilter, 0);
+  }, [search, kindFilter, runSearch]);
+
+  const loadMore = useCallback(() => {
+    const term = search.trim();
+    if (term) runSearch(term, kindFilter, searchOffset + SEARCH_PAGE_SIZE);
+  }, [search, kindFilter, searchOffset, runSearch]);
 
   useEffect(() => {
     if (!profileOpen) return;
@@ -149,15 +279,11 @@ export default function ReelHouseApp() {
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [profileOpen]);
 
-  const searchResults = useMemo(() => uniqueById(searchItems), [searchItems]);
-
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
-    setSearch("");
-    setSearchItems([]);
-    setSearchBusy(false);
+    handleSearchChange("");
     searchToggleRef.current?.focus({ preventScroll: true });
-  }, []);
+  }, [handleSearchChange]);
 
   // Back pops the topmost layer only; on home it is a no-op so a stray
   // remote key never leaves the app.
@@ -181,9 +307,9 @@ export default function ReelHouseApp() {
   // Enter in the search field commits the query: focus steps into the
   // first result so browsing continues without a pointer.
   const commitSearch = useCallback((): boolean => {
-    if (!searchOpen || !searchResults.length) return false;
+    if (!searchOpen || !searchItems.length) return false;
     return moveFocus("down");
-  }, [searchOpen, searchResults]);
+  }, [searchOpen, searchItems]);
 
   useTvNavigation({ onBack: handleBack, onEnterInText: commitSearch });
 
@@ -195,7 +321,8 @@ export default function ReelHouseApp() {
     }
   }, []);
 
-  const heroStyle = useMemo(() => library.hero.backdropUrl ? { backgroundImage: `url(${library.hero.backdropUrl})` } : undefined, [library.hero]);
+  const searchActive = searchOpen && Boolean(search.trim());
+  const showLoadMore = searchStatus === "ready" && searchItems.length > 0 && searchItems.length < searchTotal;
 
   return (
     <main>
@@ -236,20 +363,70 @@ export default function ReelHouseApp() {
       </header>
 
       {searchOpen && <section className="search-panel" id="reelhouse-search" aria-label="Search library">
-        <SearchIcon /><input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search movies, shows, home videos…" aria-label="Search movies, shows, and home videos" />
-        {search && <button onClick={() => setSearch("")}>Clear</button>}
+        <SearchIcon /><input autoFocus value={search} onChange={(e) => handleSearchChange(e.target.value)} placeholder="Search movies, shows, home videos…" aria-label="Search movies, shows, and home videos" />
+        {search && <button onClick={() => handleSearchChange("")}>Clear</button>}
       </section>}
 
-      {searchOpen && search.trim() ? (
-        <section className="search-results page-gutter" aria-busy={searchBusy}>
+      {searchActive ? (
+        <section className="search-results page-gutter" aria-live="polite" aria-busy={searchStatus === "loading"}>
+          <div className="search-toolbar">
+            {KIND_FILTERS.map((filter) => (
+              <button
+                key={filter.label}
+                className={filter.value === kindFilter ? "filter-chip active" : "filter-chip"}
+                onClick={() => setKindFilter(filter.value)}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
           <div className="section-heading">
             <h2>Search results</h2>
-            <span aria-live="polite">{searchBusy ? "Searching…" : `${searchResults.length} matches`}</span>
+            <span>
+              {searchStatus === "loading" && "Searching…"}
+              {searchStatus === "ready" && (searchTotal > searchItems.length ? `${searchItems.length} of ${searchTotal} matches` : `${searchItems.length} matches`)}
+              {searchStatus === "error" && "Search unavailable"}
+            </span>
           </div>
-          <div className="poster-grid">{searchResults.map((item) => <Card key={item.id} item={item} onOpen={setSelected} />)}</div>
+          {searchStatus === "loading" && <p className="state-note">Searching for “{search.trim()}”…</p>}
+          {searchStatus === "error" && (
+            <div className="state-note error-state" role="alert">
+              <p>{searchError || "Search is temporarily unavailable."}</p>
+              <button onClick={retrySearch}>Retry</button>
+            </div>
+          )}
+          {searchStatus === "ready" && searchItems.length === 0 && (
+            <div className="state-note empty-state">
+              <p>No matches for “{search.trim()}”{kindFilter ? ` in ${KIND_FILTERS.find((f) => f.value === kindFilter)?.label}` : ""}.</p>
+              <p>Try a shorter term or a different type filter.</p>
+            </div>
+          )}
+          {searchItems.length > 0 && (
+            <div className="poster-grid">
+              {searchItems.map((item) => <Card key={item.id} item={item} onOpen={setSelected} />)}
+            </div>
+          )}
+          {showLoadMore && (
+            <div className="load-more-row">
+              <button className="secondary-button" onClick={loadMore} disabled={loadingMore}>
+                {loadingMore ? "Loading…" : `Load more (${searchTotal - searchItems.length} remaining)`}
+              </button>
+            </div>
+          )}
         </section>
       ) : <>
-        <section className="hero" style={heroStyle}>
+        {libraryError && <div className="library-banner page-gutter" role="alert">
+          <span>Couldn’t reach the ReelHouse API — showing demo titles.</span>
+          <button onClick={retryLibrary}>Retry</button>
+        </div>}
+        <section className="hero">
+          {library.hero.backdropUrl && (
+            <div
+              key={library.hero.backdropUrl}
+              className="hero-bg"
+              style={{ backgroundImage: `url(${library.hero.backdropUrl})` }}
+            />
+          )}
           <div className="hero-shade" />
           <div className="hero-content page-gutter">
             <p className="eyebrow">{library.hero.subtitle || "Featured in your library"}</p>
@@ -263,12 +440,29 @@ export default function ReelHouseApp() {
           </div>
         </section>
 
-        <div className="content-rail">
-          <div className="source-chip">{library.source === "jellyfin" ? "● Connected to ReelHouse Engine" : "Demo library • connect Jellyfin to index your NAS"}</div>
+        <div className="content-rail" aria-busy={libraryLoading}>
+          <div
+            className={`source-chip${library.degraded ? " degraded" : ""}${libraryLoading ? " connecting" : ""}`}
+            role="status"
+          >
+            {libraryLoading
+              ? <><span className="chip-dot" aria-hidden="true" />Connecting to ReelHouse Engine…</>
+              : library.source === "jellyfin"
+                ? "● Connected to ReelHouse Engine"
+                : library.degraded
+                  ? "● ReelHouse Engine unreachable — demo titles shown"
+                  : "Demo library • connect Jellyfin to index your NAS"}
+          </div>
           {library.sections.map((section) => <section className="media-section" key={section.title}>
             <div className="section-heading page-gutter"><h2>{section.title}</h2><button>See all ›</button></div>
             <div className="media-row page-gutter">{section.items.map((item) => <Card key={`${section.title}-${item.id}`} item={item} onOpen={setSelected} />)}</div>
           </section>)}
+          {library.source === "jellyfin" && library.sections.length === 0 && (
+            <div className="media-empty page-gutter">
+              <p>Connected, but nothing is indexed yet.</p>
+              <p>Once the ReelHouse Engine finishes syncing your Jellyfin libraries, your rows will appear here.</p>
+            </div>
+          )}
         </div>
       </>}
 
