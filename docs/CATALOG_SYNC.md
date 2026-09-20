@@ -13,14 +13,17 @@ Jellyfin.
 
 | Path | Role |
 |---|---|
-| `db/migrations-catalog/0001–0003` | Catalog schema: libraries, items, provider ids, taxonomies, scan history, sync state, quarantine |
+| `db/migrations-catalog/0001–0004` | Catalog schema: libraries, items, provider ids, taxonomies, scan history, sync state, quarantine, identity review/overrides |
 | `src/lib/catalog/config.ts` | Pure parse/validate for `MEDIA_CATALOG_DATABASE_URL`, Jellyfin sync credentials, retirement policy |
 | `src/lib/catalog/model.ts` | Jellyfin payload → normalized model + the content fingerprint (pure) |
 | `src/lib/catalog/jellyfin-client.ts` | Bounded Jellyfin API client (injectable for fixtures) |
 | `src/lib/catalog/sync.ts` | The engine: pass-ordered scan, idempotent upserts, retirement, quarantine, rebuild |
+| `src/lib/catalog/review.ts` | Quarantine review workflow, catalog detectors, identity overrides (RH-0023) |
 | `scripts/catalog-migrate.ts` | Catalog migration CLI (`npm run catalog:migrate`) |
 | `scripts/catalog-sync.ts` | Sync CLI (`npm run catalog:sync` / `:full` / `:rebuild`) |
+| `scripts/catalog-review.ts` | Review CLI (`npm run catalog:review` — see [CATALOG_REVIEW.md](CATALOG_REVIEW.md)) |
 | `src/lib/catalog/catalog.int.test.ts` | Fixture-backed integration suite against the disposable PG18 |
+| `src/lib/catalog/review.int.test.ts` | Quarantine review integration suite (RH-0023) |
 
 ## Configuration
 
@@ -71,7 +74,7 @@ nothing, succeeded pages stay committed, and any rerun is idempotent.
 |---|---|
 | `incremental` (default) | Per-library `MinDateLastSaved` cursor from the previous successful scan; touches only changed items; **never retires** |
 | `full` | Reads everything; sightings refresh freshness; computes missing/retirement |
-| `rebuild` | Wipes catalog content (rows, taxonomies, quarantine, cursor) in the catalog database only, then a full scan; scan history is kept |
+| `rebuild` | Wipes catalog content (rows, taxonomies, quarantine, cursor) in the catalog database only, then a full scan; scan history is kept. Operator identity decisions (`catalog_identity_override`, RH-0023) survive by design |
 
 A first incremental run with no recorded cursor behaves as a sighting
 pass without retirement, so it is safe before the first full scan.
@@ -102,10 +105,18 @@ with the verbatim payload snapshot for resolution:
 | `orphan_parent` | A season/episode whose parent row does not exist |
 | `invalid_item` | Payload present but not representable (e.g. no name) |
 
-When the upstream ambiguity is fixed, the next successful sync of the
-item sets `resolved_at` automatically — no manual cleanup. Open records
-are the sync's answer to "why is this item missing from my catalog?":
+Operator identity decisions (`catalog_identity_override`) take precedence
+over the first-writer heuristic: a contested provider id or library
+membership that has been remapped by an operator is enforced
+deterministically on every later scan. When the upstream ambiguity is
+fixed, the next successful sync of the item sets `resolved_at`
+automatically — no manual cleanup. Open records are the sync's answer to
+"why is this item missing from my catalog?":
 check `SELECT external_id, reason, detail FROM catalog_quarantine WHERE resolved_at IS NULL;`
+
+The review half of this workflow — human resolution, catalog-level
+duplicate-path and renamed-identity detectors, and safe remapping — lives
+in [CATALOG_REVIEW.md](CATALOG_REVIEW.md) (RH-0023).
 
 ## Roles (least privilege)
 

@@ -116,13 +116,16 @@ npm run catalog:migrate          # apply catalog migrations (MEDIA_CATALOG_DATAB
 npm run catalog:sync             # incremental scan
 npm run catalog:sync:full        # full scan; computes non-destructive retirement
 npm run catalog:rebuild          # wipe catalog content and rebuild from Jellyfin
+npm run catalog:review -- list   # triage quarantined identities (see docs/CATALOG_REVIEW.md)
 ```
 
 Identity, provenance, freshness, quarantine of ambiguous identities, and
 the retirement policy are documented in
-[docs/CATALOG_SYNC.md](docs/CATALOG_SYNC.md). The sync fails closed on
-missing credentials and never writes to Jellyfin or to the `reelhouse`
-database.
+[docs/CATALOG_SYNC.md](docs/CATALOG_SYNC.md). Reviewing the quarantine,
+detecting duplicate files and renamed items, and safe identity remapping
+are documented in [docs/CATALOG_REVIEW.md](docs/CATALOG_REVIEW.md). The
+sync fails closed on missing credentials and never writes to Jellyfin or to
+the `reelhouse` database.
 
 ## Security note
 
