@@ -165,3 +165,39 @@ export function loadCatalogSyncPolicy(env: Record<string, string | undefined>): 
 
 // Re-exported so every catalog module scrubs with the same helpers.
 export { redactDatabaseUrl };
+
+export type CatalogFreshnessPolicyResult =
+  | { kind: "valid"; policy: CatalogFreshnessPolicy }
+  | { kind: "invalid"; errors: string[] };
+
+export interface CatalogFreshnessPolicy {
+  // Read models report state "stale" once the last successful sync is older
+  // than this. Stale data is served but explicitly flagged — the degradation
+  // is announced, never hidden and never guessed about.
+  staleAfterMs: number;
+}
+
+export const CATALOG_STALE_HOURS_VAR = "MEDIA_CATALOG_STALE_HOURS";
+
+const FRESHNESS_DEFAULTS = { staleHours: 24 } as const;
+const FRESHNESS_LIMITS = { staleHours: { min: 1, max: 8760 } } as const;
+const HOUR_MS = 60 * 60 * 1000;
+
+export function loadCatalogFreshnessPolicy(env: Record<string, string | undefined>): CatalogFreshnessPolicyResult {
+  const rawHours = env[CATALOG_STALE_HOURS_VAR]?.trim();
+  if (!rawHours) {
+    return { kind: "valid", policy: { staleAfterMs: FRESHNESS_DEFAULTS.staleHours * HOUR_MS } };
+  }
+  if (!/^\d+$/.test(rawHours)) {
+    return { kind: "invalid", errors: [`${CATALOG_STALE_HOURS_VAR} must be a positive integer (got "${rawHours}")`] };
+  }
+  const hours = Number(rawHours);
+  const { min, max } = FRESHNESS_LIMITS.staleHours;
+  if (hours < min || hours > max) {
+    return {
+      kind: "invalid",
+      errors: [`${CATALOG_STALE_HOURS_VAR} must be between ${min} and ${max} hours (got ${hours})`]
+    };
+  }
+  return { kind: "valid", policy: { staleAfterMs: hours * HOUR_MS } };
+}

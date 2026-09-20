@@ -7,6 +7,7 @@ import {
   describeCatalogDatabaseConfig,
   describeJellyfinSyncConfig,
   loadCatalogDatabaseConfig,
+  loadCatalogFreshnessPolicy,
   loadCatalogSyncPolicy,
   loadJellyfinSyncConfig
 } from "./config.ts";
@@ -119,6 +120,24 @@ test("retirement policy defaults to 30 days and validates bounds", () => {
   if (zero.kind === "invalid") assert.match(zero.errors[0], /between 1 and 3650/);
 
   const junk = loadCatalogSyncPolicy({ MEDIA_CATALOG_RETIREMENT_DAYS: "soon" });
+  assert.equal(junk.kind, "invalid");
+  if (junk.kind === "invalid") assert.match(junk.errors[0], /positive integer/);
+});
+
+test("freshness policy defaults to 24 hours and validates bounds", () => {
+  const blank = loadCatalogFreshnessPolicy({});
+  assert.equal(blank.kind, "valid");
+  if (blank.kind === "valid") assert.equal(blank.policy.staleAfterMs, 24 * 60 * 60 * 1000);
+
+  const custom = loadCatalogFreshnessPolicy({ MEDIA_CATALOG_STALE_HOURS: "6" });
+  assert.equal(custom.kind, "valid");
+  if (custom.kind === "valid") assert.equal(custom.policy.staleAfterMs, 6 * 60 * 60 * 1000);
+
+  const over = loadCatalogFreshnessPolicy({ MEDIA_CATALOG_STALE_HOURS: "8761" });
+  assert.equal(over.kind, "invalid");
+  if (over.kind === "invalid") assert.match(over.errors[0], /between 1 and 8760 hours/);
+
+  const junk = loadCatalogFreshnessPolicy({ MEDIA_CATALOG_STALE_HOURS: "stale" });
   assert.equal(junk.kind, "invalid");
   if (junk.kind === "invalid") assert.match(junk.errors[0], /positive integer/);
 });
