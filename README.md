@@ -92,12 +92,15 @@ npm run build && npm start
 ```
 
 `npm run test` runs the deterministic vitest suite (spatial navigation
-engine, TV interaction shell, bounded search/library contract, and
-search-results resilience paths) with no network or credentials
-required. Then check `GET /` (app shell), `GET /api/library`, and
-`GET /api/search?q=`. The bounded search/library request contract is
-documented in
-[docs/SEARCH_LIBRARY_CONTRACT.md](docs/SEARCH_LIBRARY_CONTRACT.md). See
+engine, TV interaction shell, bounded search/library contract, poster
+image-loading guards, and search-results resilience paths) with no
+network or credentials required. Then check `GET /` (app shell), `GET
+/api/library`, and `GET /api/search?q=`. The bounded search/library
+request contract is documented in
+[docs/SEARCH_LIBRARY_CONTRACT.md](docs/SEARCH_LIBRARY_CONTRACT.md);
+poster/backdrop loading (responsive sizing, priority, layout-shift
+protection, fallbacks) is documented in
+[docs/IMAGE_LOADING.md](docs/IMAGE_LOADING.md). See
 [docs/BASELINE.md](docs/BASELINE.md) for the full imported-source
 baseline: deployment mapping, data authorities, and the PostgreSQL 18
 migration surface.

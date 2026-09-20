@@ -36,7 +36,7 @@ svg { width: 1.25rem; height: 1.25rem; }
 .search-panel input { flex: 1; border: 0; outline: 0; background: transparent; color: white; font-size: 1.05rem; padding: 7px 0; }
 .search-panel button { border: 0; background: transparent; color: var(--gold-bright); cursor: pointer; }
 .hero { min-height: 68vh; display: flex; align-items: end; position: relative; background: radial-gradient(circle at 70% 20%, #3c3022 0, #171719 42%, #09090a 78%); }
-.hero-bg { position: absolute; inset: 0; background-size: cover; background-position: center 35%; animation: fade-in .6s ease both; }
+.hero-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center 35%; animation: fade-in .6s ease both; }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 .hero-shade { position: absolute; inset: 0; background: linear-gradient(90deg, #09090aea 0%, #09090aa0 42%, #09090a1a 75%), linear-gradient(0deg, #0b0b0c 0%, transparent 45%); }
 .hero-content { position: relative; z-index: 2; width: min(760px, 92vw); padding-top: 150px; padding-bottom: 92px; }

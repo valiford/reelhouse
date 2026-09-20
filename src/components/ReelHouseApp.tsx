@@ -6,6 +6,7 @@ import { demoLibrary } from "@/lib/demo";
 import { focusInitialIn, moveFocus, reveal } from "@/lib/tvnav";
 import { uniqueById } from "@/lib/uniqueById";
 import { boundedMessage } from "@/lib/diag";
+import { BACKDROP_WIDTHS, POSTER_SIZES, POSTER_WIDTHS, responsiveImage } from "@/lib/poster-image";
 import { useTvNavigation } from "@/hooks/useTvNavigation";
 import { HomeIcon, InfoIcon, PlayIcon, SearchIcon } from "./icons";
 
@@ -33,6 +34,7 @@ function PosterFallback({ title }: { title: string }) {
 function PosterImage({ item }: { item: MediaItem }) {
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
+  const art = item.imageUrl ? responsiveImage(item.imageUrl, POSTER_WIDTHS) : null;
 
   // Server-rendered posters can finish (or fail) before hydration attaches
   // onLoad/onError, so reconcile from the element itself when it attaches.
@@ -42,15 +44,21 @@ function PosterImage({ item }: { item: MediaItem }) {
     else setFailed(true);
   };
 
-  if (failed) return <PosterFallback title={item.title} />;
+  if (failed || !art) return <PosterFallback title={item.title} />;
   return (
-    // Posters load directly from the household's Jellyfin host; routing them
-    // through the Next image optimizer is deferred to RH-0013.
+    // Posters load directly from the household's Jellyfin host, which resizes
+    // and caches per `maxWidth` — the srcSet lets the browser pick the variant
+    // matching the rendered slot instead of shipping 600w art to a 150px phone
+    // column. Routing art bytes through the Next image optimizer stays
+    // rejected: it would spend NAS CPU on a second resizer and move media
+    // traffic onto the app server, away from Jellyfin's media authority.
     // eslint-disable-next-line @next/next/no-img-element
     <img
       ref={attach}
       className={ready ? "poster-img is-ready" : "poster-img"}
-      src={item.imageUrl}
+      src={art.src}
+      srcSet={art.srcSet || undefined}
+      sizes={art.srcSet ? POSTER_SIZES : undefined}
       alt=""
       loading="lazy"
       decoding="async"
@@ -323,6 +331,9 @@ export default function ReelHouseApp() {
 
   const searchActive = searchOpen && Boolean(search.trim());
   const showLoadMore = searchStatus === "ready" && searchItems.length > 0 && searchItems.length < searchTotal;
+  const heroBackdrop = library.hero.backdropUrl
+    ? responsiveImage(library.hero.backdropUrl, BACKDROP_WIDTHS)
+    : null;
 
   return (
     <main>
@@ -420,11 +431,21 @@ export default function ReelHouseApp() {
           <button onClick={retryLibrary}>Retry</button>
         </div>}
         <section className="hero">
-          {library.hero.backdropUrl && (
-            <div
-              key={library.hero.backdropUrl}
+          {heroBackdrop && (
+            // Hero art is the page's LCP element: eager, high fetch priority,
+            // sized to the viewport. The keyed remount keeps the crossfade
+            // when the engine payload repoints the backdrop.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={heroBackdrop.src}
               className="hero-bg"
-              style={{ backgroundImage: `url(${library.hero.backdropUrl})` }}
+              src={heroBackdrop.src}
+              srcSet={heroBackdrop.srcSet || undefined}
+              sizes={heroBackdrop.srcSet ? "100vw" : undefined}
+              alt=""
+              decoding="async"
+              fetchPriority="high"
+              draggable={false}
             />
           )}
           <div className="hero-shade" />
