@@ -55,8 +55,9 @@ layer, or authority changes.
 
 All green in `reelhouse-rh-0013`, no credentials (demo mode):
 
-- `npm test` — **103/103 pass** across 11 files. The 92 inherited from
-  the chain all pass unmodified; 11 new: 10 unit (`poster-image.test.ts`)
+- `npm test` — **103/103 pass** across 11 files. The 86 inherited from
+  the chain (rh-0019 tip count) all pass unmodified; **17 new**: 10
+  unit (`poster-image.test.ts`)
   and 7 component guards (`ReelHouseApp.posters.test.tsx` — new file,
   deliberately separate from `ReelHouseApp.test.tsx` to avoid colliding
   with rh-0012's in-flight edits): srcSet/sizes present for Jellyfin art
