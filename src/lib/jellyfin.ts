@@ -1,6 +1,17 @@
 import type { LibraryPayload, MediaItem } from "./types";
 import { demoLibrary } from "./demo";
 
+// Explicit degradation (RH-0020): a read that could not be served from
+// Jellyfin says so. Demo data and empty results are still returned where the
+// product needs something to render, but the reason travels with the payload
+// instead of being buried in a server log.
+export type DegradedReason = "jellyfin_unconfigured" | "jellyfin_unreachable";
+
+export interface JellyfinResult<T> {
+  value: T;
+  degraded: DegradedReason | null;
+}
+
 const serverUrl = process.env.JELLYFIN_URL?.replace(/\/$/, "");
 const apiKey = process.env.JELLYFIN_API_KEY;
 const userId = process.env.JELLYFIN_USER_ID;
@@ -61,8 +72,10 @@ async function query(params: Record<string, string>) {
   return (body.Items || []).map(mapItem);
 }
 
-export async function getLibrary(): Promise<LibraryPayload> {
-  if (!serverUrl || !apiKey || !userId) return demoLibrary;
+export async function getLibrary(): Promise<JellyfinResult<LibraryPayload>> {
+  if (!serverUrl || !apiKey || !userId) {
+    return { value: demoLibrary, degraded: "jellyfin_unconfigured" };
+  }
 
   try {
     const [recent, movies, series, resume] = await Promise.all([
@@ -74,37 +87,49 @@ export async function getLibrary(): Promise<LibraryPayload> {
 
     const hero = recent.find((x) => x.backdropUrl) || recent[0] || movies[0] || demoLibrary.hero;
     return {
-      source: "jellyfin",
-      hero,
-      sections: [
-        ...(resume.length ? [{ title: "Continue Watching", items: resume }] : []),
-        { title: "Recently Added", items: recent },
-        { title: "Movies", items: movies },
-        { title: "Shows", items: series }
-      ].filter((section) => section.items.length)
+      value: {
+        source: "jellyfin",
+        hero,
+        sections: [
+          ...(resume.length ? [{ title: "Continue Watching", items: resume }] : []),
+          { title: "Recently Added", items: recent },
+          { title: "Movies", items: movies },
+          { title: "Shows", items: series }
+        ].filter((section) => section.items.length)
+      },
+      degraded: null
     };
   } catch (error) {
-    console.error("Falling back to demo library:", error);
-    return demoLibrary;
+    console.error("Jellyfin library unavailable, serving demo library:", error);
+    return { value: demoLibrary, degraded: "jellyfin_unreachable" };
   }
 }
 
-export async function searchLibrary(term: string): Promise<MediaItem[]> {
-  if (!term.trim()) return [];
+export async function searchLibrary(term: string): Promise<JellyfinResult<MediaItem[]>> {
+  if (!term.trim()) return { value: [], degraded: null };
   if (!serverUrl || !apiKey || !userId) {
     const q = term.toLowerCase();
-    return demoLibrary.sections.flatMap((s) => s.items).filter((x, i, all) =>
-      all.findIndex((y) => y.id === x.id) === i &&
-      `${x.title} ${x.overview || ""} ${(x.genres || []).join(" ")}`.toLowerCase().includes(q)
-    );
+    return {
+      value: demoLibrary.sections
+        .flatMap((s) => s.items)
+        .filter((x, i, all) =>
+          all.findIndex((y) => y.id === x.id) === i &&
+          `${x.title} ${x.overview || ""} ${(x.genres || []).join(" ")}`.toLowerCase().includes(q)
+        ),
+      degraded: "jellyfin_unconfigured"
+    };
   }
   try {
-    return await query({
-      IncludeItemTypes: "Movie,Series,Episode,Video",
-      SearchTerm: term,
-      Limit: "40"
-    });
-  } catch {
-    return [];
+    return {
+      value: await query({
+        IncludeItemTypes: "Movie,Series,Episode,Video",
+        SearchTerm: term,
+        Limit: "40"
+      }),
+      degraded: null
+    };
+  } catch (error) {
+    console.error("Jellyfin search unavailable:", error);
+    return { value: [], degraded: "jellyfin_unreachable" };
   }
 }

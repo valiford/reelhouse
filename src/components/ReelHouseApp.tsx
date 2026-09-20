@@ -125,7 +125,7 @@ export default function ReelHouseApp() {
         </section>
 
         <div className="content-rail">
-          <div className="source-chip">{library.source === "jellyfin" ? "● Connected to ReelHouse Engine" : "Demo library • connect Jellyfin to index your NAS"}</div>
+          <div className="source-chip">{library.source === "demo" ? "Demo library • connect Jellyfin to index your NAS" : "● Connected to ReelHouse Engine"}</div>
           {library.sections.map((section) => <section className="media-section" key={section.title}>
             <div className="section-heading page-gutter"><h2>{section.title}</h2><button>See all ›</button></div>
             <div className="media-row page-gutter">{section.items.map((item) => <Card key={`${section.title}-${item.id}`} item={item} onOpen={setSelected} />)}</div>
