@@ -132,8 +132,11 @@ through direct database access:
 
 - **Profiles & per-profile state** (`/api/profiles…`): profiles, per-profile
   preferences, the watch/continue-watching overlay, and Jellyfin account
-  links; progress writes are transactional and support safe retries via
-  `Idempotency-Key`.
+  links; progress writes are transactional, support safe retries via
+  `Idempotency-Key`, refuse stale (older-timestamped) progress, and collapse
+  duplicate playback events; `POST /api/profiles/{id}/watch-state/reconcile`
+  folds the linked Jellyfin account's resumable items into the overlay with
+  last-writer-wins by event time (Jellyfin is never written).
 - **Lists & home rows** (`/api/favorites`, `/api/watchlists`,
   `/api/collections`, `/api/home-rows`): durable favorites, watchlists,
   curated collections, and home-screen row configuration with SQL-enforced

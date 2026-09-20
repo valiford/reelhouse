@@ -1,10 +1,11 @@
-# Household state persistence (RH-0017 + RH-0018)
+# Household state persistence (RH-0017 + RH-0018 + RH-0022)
 
 How ReelHouse-owned household state — profiles, per-profile preferences,
 the watch/continue-watching overlay, Jellyfin account links, favorites,
 watchlists, curated collections, home-screen row configuration, the stable
 media-item bridge, and sync metadata — is persisted in the PostgreSQL 18
-`reelhouse` database through the server API.
+`reelhouse` database through the server API, including the RH-0022
+reconciliation of that overlay against Jellyfin's read-only playback state.
 
 Scope of this document: the household persistence API (RH-0017 profile /
 preference / watch-state surface and RH-0018 lists / home-rows surface,
@@ -38,21 +39,23 @@ layer ([DATABASE.md](DATABASE.md)), and catalog data (RH-0016 —
 | `src/lib/household/validate.ts` | Pure request validation for the RH-0017 surface. Value-free bounded errors; mirrors the database CHECKs |
 | `src/lib/household/model.ts` | Pure request model for the RH-0018 surface: bounds, media identity, home-row source pairing, idempotency keys, canonical fingerprints |
 | `src/lib/household/errors.ts` | Typed store errors + SQLSTATE classification (unique→conflict, FK→missing, CHECK→input) — the ONE error family both surfaces throw |
-| `src/lib/household/store.ts` | The RH-0017 kernel: all SQL for profiles/preferences/watch-state/links, `transact()`, `resolveMediaRef()`, `claimIdempotencyKey()`, sync metadata. Injected runner, no `server-only`, type-only pg import |
+| `src/lib/household/store.ts` | The RH-0017 kernel: all SQL for profiles/preferences/watch-state/links, `transact()`, `resolveMediaRef()`, `claimIdempotencyKey()`, sync metadata; RH-0022 adds the locked overlay read/write, exact-event dedupe, and stale/duplicate verdicts. Injected runner, no `server-only`, type-only pg import |
+| `src/lib/household/reconcile.ts` | RH-0022: the Jellyfin resume client (API-only, bounded page), the pure merge rule, and `reconcileProfileWatchState()` — one transaction per run, profile-isolation guard inside it |
 | `src/lib/household/lists.ts` | RH-0018 domain SQL (favorites/watchlists/collections/home-rows) built on the same kernel |
 | `src/lib/household/idempotency.ts` | `runIdempotentMutation()`: claim + mutation + stored replay response in one transaction (RH-0018 endpoints) |
 | `src/lib/household/api.ts` | The single error→response mapper and the bounded JSON body reader |
 | `src/lib/household/http.ts` | Route wrapper for the RH-0018 routes (funnels into the same mapper) |
 | `src/app/api/profiles/**`, `src/app/api/{favorites,watchlists,collections,home-rows}/**` | The route handlers (thin glue: parse → store → respond) |
-| `src/lib/household/household.test.ts`, `model.test.ts` | Unit suites (validation, classification, mapping, scripted runners; RH-0018 bounds/fingerprints) |
-| `src/lib/household/household.int.test.ts`, `household-lists.int.test.ts` | Integration suites on the disposable PG18 (own databases, created on demand) |
+| `src/lib/household/household.test.ts`, `model.test.ts`, `reconcile.test.ts` | Unit suites (validation, classification, mapping, scripted runners; RH-0018 bounds/fingerprints; RH-0022 resume parsing + merge rule) |
+| `src/lib/household/household.int.test.ts`, `household-lists.int.test.ts`, `watch-progress.int.test.ts` | Integration suites on the disposable PG18 (own databases, created on demand) |
 | `db/migrations/0010_idempotency_responses.sql` | Stored replay responses for `idempotency_record` (RH-0018, additive) |
 
 ## HTTP API
 
 All routes are dynamic (`force-dynamic`). Errors share one envelope:
 `{"error":{"code","message"}}` with codes `invalid_request` (400),
-`not_found` (404), `conflict` (409), `database_unavailable` (503), and
+`not_found` (404), `conflict` (409), `database_unavailable` (503),
+`jellyfin_unavailable` (503, RH-0022 reconciliation), and
 `internal_error` (500). Messages are bounded and value-free; the raw
 `DATABASE_URL` is scrubbed from anything echoed.
 
@@ -69,6 +72,7 @@ All routes are dynamic (`force-dynamic`). Errors share one envelope:
 | `/api/profiles/{id}/preferences` | PUT | **Full replacement** of the preferences object (no merge semantics); must be a JSON object ≤ 16 KB / depth 32 |
 | `/api/profiles/{id}/watch-state` | GET | All watch state for the profile (`?mode=all\|continue`, `?limit=`; `continue` = the Continue Watching rail: in-progress only, newest activity first, default 20 / max 50) |
 | `/api/profiles/{id}/watch-state` | PUT | Record progress (see below) |
+| `/api/profiles/{id}/watch-state/reconcile` | POST | Reconcile the overlay from the linked Jellyfin account's resumable items (RH-0022, see below; `?limit=` default 50 / max 200) |
 | `/api/profiles/{id}/jellyfin-link` | GET | The 1:1 Jellyfin account link (`{link: … \| null}`) |
 | `/api/profiles/{id}/jellyfin-link` | PUT | Upsert `{jellyfinUserId}`; a user id claimed by another profile → 409 |
 | `/api/profiles/{id}/jellyfin-link` | DELETE | Remove the link → 204 |
@@ -97,6 +101,19 @@ All routes are dynamic (`force-dynamic`). Errors share one envelope:
 - One transaction writes the overlay upsert **and** the append-only
   `playback_event`. Failure rolls back everything, including the media ref;
   corrections rewrite `watch_state`, never history.
+- **Stale progress (RH-0022):** an optional `playedAt` (ISO 8601, at most
+  5 minutes in the future) orders events. A strictly older timestamped
+  event NEVER regresses the overlay — the response reports
+  `"stale": true` — but the play is still recorded once in history.
+  Without `playedAt` the write asserts "now" and applies unconditionally,
+  exactly like the RH-0017 contract.
+- **Duplicate playback events (RH-0022):** an unstamped write identical to
+  the stored overlay is a retry with no new information: nothing is
+  rewritten, no history is appended, and the response reports
+  `"duplicate": true`. An exact replay of an already-recorded timestamped
+  event (same profile, item, progress, and event time) is likewise never
+  appended twice. Responses carry `applied` / `stale` / `duplicate` beside
+  `watchState`.
 - **Idempotent retries:** send an `Idempotency-Key` header (≤ 200 chars).
   The same key with the same payload replays without appending duplicate
   history (the response carries `"idempotentReplay": true`); the same key
@@ -108,8 +125,42 @@ All routes are dynamic (`force-dynamic`). Errors share one envelope:
 
 `?mode=continue` is exactly the shape of the `watch_state_resume_idx`
 partial index: `completed = false AND position_ticks > 0`, newest
-`last_played_at` first, hard-bounded. Marking progress `completed: true`
-drops the item from the rail; a later in-progress write returns it.
+`last_played_at` first (ties broken by media ref id, so ordering is
+deterministic across reads and pagination), hard-bounded. Marking progress
+`completed: true` drops the item from the rail; a later in-progress write
+returns it.
+
+#### Watch-state reconciliation (RH-0022)
+
+`POST /api/profiles/{id}/watch-state/reconcile` folds the linked Jellyfin
+account's resumable items (one bounded page, default 50 / max 200) into the
+profile's overlay. Jellyfin stays the playback authority and is only read,
+through its API, never its internal database and never written:
+
+- **Merge rule (last writer wins by event time).** A Jellyfin event
+  strictly newer than the stored overlay applies (overlay + one
+  `playback_event` with `recorded_by: 'jellyfin_import'`); a strictly
+  older one is refused (`stale`); an item identical to the stored overlay
+  is already applied (`duplicate`). An item Jellyfin reports WITHOUT an
+  event timestamp cannot be ordered, so it only seeds an empty overlay and
+  never overwrites local state.
+- **Duplicate safety.** Exact replays of already-recorded events are
+  detected and suppressed, so re-running reconciliation is a no-op — the
+  response re-counts (`scanned/applied/stale/duplicate/skipped`) and no
+  history accumulates.
+- **Profile isolation.** The 1:1 `jellyfin_account_link` means one Jellyfin
+  identity maps to exactly one profile. The run re-reads the link INSIDE
+  the apply transaction and aborts (409) if it changed between fetch and
+  apply; imported rows are written only for the linked profile.
+- **Fail closed.** Unknown profile → 404; no link → 409 (there is no
+  identity to reconcile from); Jellyfin unconfigured, invalid, or
+  unreachable → 503 `jellyfin_unavailable`. Malformed items are skipped
+  and counted (`skipped`), never half-applied. The run either fully
+  commits or fully rolls back.
+- **Observability.** Each run tracks the `sync_cursor` job row
+  `jellyfin_watch_reconcile:{profileId}`: started before the fetch,
+  succeeded with the run counters, or failed with a bounded error that
+  never clears the last success.
 
 ### Favorites, watchlists, collections & home rows (RH-0018)
 
@@ -224,10 +275,12 @@ an operator task — see the RH-0015 findings and
 ## Verification
 
 ```bash
-npm test            # unit: validation, classification, mapping, scripted runners, RH-0018 bounds/fingerprints
+npm test            # unit: validation, classification, mapping, scripted runners,
+                    # RH-0018 bounds/fingerprints, RH-0022 resume parsing + merge rule
 npm run test:db:up  # disposable PostgreSQL 18
-npm run test:db     # includes household.int.test.ts (reelhouse_household_test)
-                    # and household-lists.int.test.ts (reelhouse_household_lists_test)
+npm run test:db     # includes household.int.test.ts (reelhouse_household_test),
+                    # household-lists.int.test.ts (reelhouse_household_lists_test),
+                    # and watch-progress.int.test.ts (reelhouse_household_watch_test)
 npm run test:db:down
 ```
 
@@ -236,9 +289,16 @@ case-insensitive duplicate names, preferences replacement (and the
 database CHECK backstop), stable media-ref resolution, the link's 1:1 and
 uniqueness rules, atomic progress writes and rollback (media ref included),
 missing-profile and CHECK-violation classification, the continue-watching
-filter/order/limit, per-profile scoping, the sync lifecycle
-(start/succeed/fail/recover with bounded errors), and idempotent
-claim/replay/conflict semantics; plus favorites/watchlists/collections/
-home-rows durability, duplicate creates, splice/move/reorder, stale-set
-rejection, isolation, cascades, replay byte-equality, key-reuse conflicts,
-mid-transaction rollback with key recovery, and the response-size CHECK.
+filter/order/limit (now with deterministic tie-breaking), per-profile
+scoping, the sync lifecycle (start/succeed/fail/recover with bounded
+errors), and idempotent claim/replay/conflict semantics; plus
+favorites/watchlists/collections/home-rows durability, duplicate creates,
+splice/move/reorder, stale-set rejection, isolation, cascades, replay
+byte-equality, key-reuse conflicts, mid-transaction rollback with key
+recovery, and the response-size CHECK. RH-0022 adds: identical-retry
+collapsing, stale-timestamp refusal with single history append, exact
+event-replay dedupe, client-timestamp recency, tied-timestamp ordering,
+and the full reconciliation matrix — seeding, idempotent re-runs,
+newer/older Jellyfin events, untimed items, skipped malformed items,
+profile isolation, fail-closed error paths, and the per-profile sync-cursor
+lifecycle.
