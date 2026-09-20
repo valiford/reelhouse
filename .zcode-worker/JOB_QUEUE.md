@@ -6,6 +6,10 @@ The highest-priority READY job with satisfied dependencies and `AUTOMATION_ELIGI
 
 | Priority | Job ID | Status | Agent | Description |
 |---:|---|---|---|---|
+| 1 | RH-0022 | READY | ZCODE | Household continue-watching reconciliation and profile isolation guard |
+| 2 | RH-0023 | READY | ZCODE | Media catalog identity conflict quarantine and repair workflow |
+| 1 | RH-0015 | READY | ZCODE | Real Synology PostgreSQL 18 ReelHouse connection and migration smoke |
+| 2 | RH-0016 | READY | ZCODE | Jellyfin to PostgreSQL media_catalog synchronization |
 | 3 | RH-0017 | READY | ZCODE | Household profiles preferences and watch-state persistence |
 | 4 | RH-0018 | READY | ZCODE | Favorites watchlists collections and home-row persistence |
 | 5 | RH-0019 | READY | ZCODE | TV remote keyboard and living-room interaction overhaul |
@@ -18,6 +22,8 @@ The highest-priority READY job with satisfied dependencies and `AUTOMATION_ELIGI
 | 5 | RH-0012 | READY | ZCODE | Jellyfin degraded-mode and reconnection UX |
 | 6 | RH-0013 | READY | ZCODE | Poster image loading and performance guard |
 | 7 | RH-0014 | READY | ZCODE | Accessibility and reduced-motion regression suite |
+| 2 | RH-0002 | READY | ZCODE | Connect the ReelHouse server-side data layer to the existing Synology PostgreSQL 18 `reelhouse` database with safe environment/secrets handling |
+| 3 | RH-0003 | READY | ZCODE | Add versioned PostgreSQL migrations for household profiles, preferences, watch state, favorites, watchlists, collections, Jellyfin links, and sync metadata |
 | 4 | RH-0004 | READY | ZCODE | Build Jellyfin API to `media_catalog` synchronization with stable item identity, provenance, freshness, and idempotent reconciliation |
 
 ## Waiting for dependencies
@@ -34,12 +40,7 @@ _None._
 
 ## Review Queue
 
-| Priority | Job ID | Status | Agent | Description |
-|---:|---|---|---|---|
-| 1 | RH-0015 | REVIEW | ZCODE | Real Synology PostgreSQL 18 ReelHouse connection and migration smoke |
-| 2 | RH-0016 | REVIEW | ZCODE | Jellyfin to PostgreSQL media_catalog synchronization |
-| 2 | RH-0002 | REVIEW | ZCODE | Connect the ReelHouse server-side data layer to the existing Synology PostgreSQL 18 `reelhouse` database with safe environment/secrets handling |
-| 3 | RH-0003 | REVIEW | ZCODE | Add versioned PostgreSQL migrations for household profiles, preferences, watch state, favorites, watchlists, collections, Jellyfin links, and sync metadata |
+_None._
 
 ## Completed / Integrated
 
