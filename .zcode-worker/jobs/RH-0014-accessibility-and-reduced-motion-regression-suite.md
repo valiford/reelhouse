@@ -1,6 +1,6 @@
 # RH-0014 — Accessibility and reduced-motion regression suite
 
-**STATUS:** READY
+**STATUS:** REVIEW
 **AGENT:** ZCODE
 **AUTOMATION_ELIGIBLE:** true
 

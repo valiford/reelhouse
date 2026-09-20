@@ -77,11 +77,15 @@ env vars are unset:
 npm install
 npm run lint
 npm run typecheck
+npm run test
 npm run build && npm start
 ```
 
 Then check `GET /` (app shell), `GET /api/library`, and
-`GET /api/search?q=`. See [docs/BASELINE.md](docs/BASELINE.md) for the
+`GET /api/search?q=`. `npm test` runs the accessibility/reduced-motion
+regression suite (keyboard, focus, semantics, contrast, failure paths,
+axe audits) — see [docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md).
+See [docs/BASELINE.md](docs/BASELINE.md) for the
 full imported-source baseline: deployment mapping, data authorities,
 and the PostgreSQL 18 migration surface.
 
