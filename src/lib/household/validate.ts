@@ -162,6 +162,24 @@ export interface WatchProgressInput {
   positionTicks: number;
   durationTicks?: number;
   completed: boolean;
+  // Client-observed event time (RH-0022), normalized to ISO 8601. Absent
+  // means "now" — the RH-0017 contract, unchanged for existing clients.
+  playedAt?: string;
+}
+
+// A client clock may lag its server slightly, but a progress event claimed to
+// happen comfortably in the future is a bug or an attack; refuse it.
+export const PLAYED_AT_FUTURE_SKEW_MS = 5 * 60 * 1000;
+
+export function parsePlayedAt(raw: unknown): string | undefined | { error: string } {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string") return { error: "played_at must be an ISO 8601 timestamp" };
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return { error: "played_at must be an ISO 8601 timestamp" };
+  if (parsed.getTime() > Date.now() + PLAYED_AT_FUTURE_SKEW_MS) {
+    return { error: "played_at must not be in the future" };
+  }
+  return parsed.toISOString();
 }
 
 export function parseWatchProgress(raw: unknown): ParseResult<WatchProgressInput> {
@@ -196,6 +214,9 @@ export function parseWatchProgress(raw: unknown): ParseResult<WatchProgressInput
     else completed = body.completed;
   }
 
+  const playedAt = parsePlayedAt(body.playedAt);
+  if (typeof playedAt === "object") errors.push(playedAt.error);
+
   if (
     positionTicks.ok &&
     durationTicks !== undefined &&
@@ -212,7 +233,10 @@ export function parseWatchProgress(raw: unknown): ParseResult<WatchProgressInput
       externalId: externalId.ok ? externalId.value : "",
       positionTicks: positionTicks.ok ? positionTicks.value : 0,
       durationTicks,
-      completed
+      completed,
+      // Key stays absent (not undefined) when no timestamp was sent, so the
+      // RH-0017 response/input shape is byte-identical for existing clients.
+      ...(typeof playedAt === "string" ? { playedAt } : {})
     }
   };
 }

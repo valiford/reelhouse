@@ -413,42 +413,177 @@ export interface WatchProgressRecord {
   positionTicks: number;
   durationTicks?: number;
   completed: boolean;
+  // Client-observed event time (RH-0022). Absent means "now": the overlay
+  // applies unconditionally, exactly like the RH-0017 contract. Present, it
+  // orders events so stale ones can never regress newer state.
+  playedAt?: Date;
+}
+
+// The overlay result plus the RH-0022 hardening verdicts: `applied` — the
+// overlay now reflects this request; `stale` — an older timestamped event
+// arrived and was refused; `duplicate` — an exact repeat whose history
+// append was suppressed.
+export interface WatchProgressResult extends WatchStateJson {
+  applied: boolean;
+  stale: boolean;
+  duplicate: boolean;
+}
+
+// Locks (and reads) the overlay row for this profile + item, or null. The
+// row lock serializes concurrent writers so stale/duplicate decisions are
+// made against committed state, not a racing snapshot.
+export async function lockWatchState(
+  tx: SqlRunner,
+  profileId: string,
+  mediaRefId: string
+): Promise<WatchStateJson | null> {
+  const result = await tx.query<WatchStateRow>(
+    `SELECT ws.profile_id, r.source, r.external_id, ws.position_ticks, ws.duration_ticks,
+            ws.completed, ws.last_played_at, ws.updated_at
+       FROM watch_state ws
+       JOIN media_item_ref r ON r.id = ws.media_ref_id
+      WHERE ws.profile_id = $1 AND ws.media_ref_id = $2
+      FOR UPDATE OF ws`,
+    [profileId, mediaRefId]
+  );
+  const row = result.rows[0];
+  return row ? toWatchStateJson(row) : null;
+}
+
+// Applies progress to the overlay (upsert). `playedAt` stamps last_played_at
+// explicitly (reconciliation, timestamped clients); null stamps now().
+// durationTicks accepts null (unknown) as well as undefined for the
+// reconciliation caller, whose Jellyfin items carry `null` for unknown.
+export async function upsertWatchState(
+  tx: SqlRunner,
+  profileId: string,
+  mediaRefId: string,
+  progress: {
+    positionTicks: number;
+    durationTicks?: number | null;
+    completed: boolean;
+  },
+  playedAt: Date | null
+): Promise<WatchStateJson> {
+  const result = await tx.query<WatchStateRow>(
+    `INSERT INTO watch_state (profile_id, media_ref_id, position_ticks, duration_ticks, completed, last_played_at)
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6, now()))
+     ON CONFLICT (profile_id, media_ref_id) DO UPDATE
+        SET position_ticks = EXCLUDED.position_ticks,
+            duration_ticks = EXCLUDED.duration_ticks,
+            completed      = EXCLUDED.completed,
+            last_played_at = COALESCE($6, now())
+     RETURNING profile_id, position_ticks, duration_ticks, completed, last_played_at, updated_at,
+               (SELECT source FROM media_item_ref WHERE id = $2) AS source,
+               (SELECT external_id FROM media_item_ref WHERE id = $2) AS external_id`,
+    [profileId, mediaRefId, progress.positionTicks, progress.durationTicks ?? null, progress.completed, playedAt]
+  );
+  const row = result.rows[0];
+  if (!row) throw new Error("household store: watch state upsert returned no row");
+  return toWatchStateJson(row);
+}
+
+export interface PlaybackEventKey {
+  profileId: string;
+  mediaRefId: string;
+  positionTicks: number;
+  durationTicks?: number;
+  completed: boolean;
+  playedAt: Date | null;
+  recordedBy: "reelhouse" | "jellyfin_import";
+}
+
+// Exact-event replay detection (RH-0022): the same profile, item, progress,
+// and event time recorded by the same authority is ONE play, no matter how
+// many times it is reported. NULL event times never match (played_at is
+// written as now()), so unstamped writes rely on the overlay comparison.
+export async function playbackEventExists(tx: SqlRunner, key: PlaybackEventKey): Promise<boolean> {
+  const result = await tx.query<{ id: string }>(
+    `SELECT id FROM playback_event
+      WHERE profile_id = $1 AND media_ref_id = $2
+        AND position_ticks = $3
+        AND duration_ticks IS NOT DISTINCT FROM $4
+        AND completed = $5
+        AND played_at IS NOT DISTINCT FROM $6
+        AND recorded_by = $7
+      LIMIT 1`,
+    [
+      key.profileId,
+      key.mediaRefId,
+      key.positionTicks,
+      key.durationTicks ?? null,
+      key.completed,
+      key.playedAt,
+      key.recordedBy
+    ]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+// Appends one history event. playback_event is append-only by design —
+// corrections rewrite watch_state, never history.
+export async function appendPlaybackEvent(tx: SqlRunner, key: PlaybackEventKey): Promise<void> {
+  await tx.query(
+    `INSERT INTO playback_event (profile_id, media_ref_id, played_at, position_ticks, duration_ticks, completed, recorded_by)
+     VALUES ($1, $2, COALESCE($6, now()), $3, $4, $5, $7)`,
+    [
+      key.profileId,
+      key.mediaRefId,
+      key.positionTicks,
+      key.durationTicks ?? null,
+      key.completed,
+      key.playedAt,
+      key.recordedBy
+    ]
+  );
 }
 
 // Atomic progress write, inside the caller's transaction: resolve the stable
-// media ref, upsert the overlay row, and append the history event. playback_event
-// is append-only by design — corrections rewrite watch_state, never history.
-export async function recordWatchProgress(tx: SqlRunner, input: WatchProgressRecord): Promise<WatchStateJson> {
+// media ref, decide stale/duplicate against the locked overlay, apply, and
+// append history exactly once. RH-0022 hardening:
+// - a timestamped event older than the stored state never regresses the
+//   overlay (it is still recorded in history — a play happened);
+// - an unstamped write identical to the stored overlay is a retry with no
+//   new information: no history append, no rewrite;
+// - an exact replay of an already-recorded timestamped event never appends
+//   history twice.
+export async function recordWatchProgress(tx: SqlRunner, input: WatchProgressRecord): Promise<WatchProgressResult> {
   try {
     const mediaRefId = await resolveMediaRef(tx, input.source, input.externalId);
-    const result = await tx.query<WatchStateRow>(
-      `INSERT INTO watch_state (profile_id, media_ref_id, position_ticks, duration_ticks, completed, last_played_at)
-       VALUES ($1, $2, $3, $4, $5, now())
-       ON CONFLICT (profile_id, media_ref_id) DO UPDATE
-          SET position_ticks = EXCLUDED.position_ticks,
-              duration_ticks = EXCLUDED.duration_ticks,
-              completed      = EXCLUDED.completed,
-              last_played_at = now()
-       RETURNING profile_id, position_ticks, duration_ticks, completed, last_played_at, updated_at,
-                 (SELECT source FROM media_item_ref WHERE id = $2) AS source,
-                 (SELECT external_id FROM media_item_ref WHERE id = $2) AS external_id`,
-      [
-        input.profileId,
-        mediaRefId,
-        input.positionTicks,
-        input.durationTicks ?? null,
-        input.completed
-      ]
-    );
-    const row = result.rows[0];
-    if (!row) throw new Error("household store: watch state upsert returned no row");
+    const current = await lockWatchState(tx, input.profileId, mediaRefId);
+    const playedAt = input.playedAt ?? null;
 
-    await tx.query(
-      `INSERT INTO playback_event (profile_id, media_ref_id, position_ticks, duration_ticks, completed, recorded_by)
-       VALUES ($1, $2, $3, $4, $5, 'reelhouse')`,
-      [input.profileId, mediaRefId, input.positionTicks, input.durationTicks ?? null, input.completed]
-    );
-    return toWatchStateJson(row);
+    const eventKey: PlaybackEventKey = {
+      profileId: input.profileId,
+      mediaRefId,
+      positionTicks: input.positionTicks,
+      durationTicks: input.durationTicks,
+      completed: input.completed,
+      playedAt,
+      recordedBy: "reelhouse"
+    };
+
+    // Stale: an explicitly timestamped event strictly older than the stored
+    // state. Unstamped writes are never stale (they assert "now").
+    if (current !== null && playedAt !== null && playedAt.getTime() < new Date(current.lastPlayedAt).getTime()) {
+      const eventAlreadyRecorded = await playbackEventExists(tx, eventKey);
+      if (!eventAlreadyRecorded) await appendPlaybackEvent(tx, eventKey);
+      return { ...current, applied: false, stale: true, duplicate: eventAlreadyRecorded };
+    }
+
+    // Unstamped duplicate: the overlay already says exactly this. The only
+    // writer that can produce it without a timestamp is a retry.
+    if (current !== null && playedAt === null &&
+        current.positionTicks === input.positionTicks &&
+        (current.durationTicks ?? null) === (input.durationTicks ?? null) &&
+        current.completed === input.completed) {
+      return { ...current, applied: false, stale: false, duplicate: true };
+    }
+
+    const eventAlreadyRecorded = playedAt !== null ? await playbackEventExists(tx, eventKey) : false;
+    const watchState = await upsertWatchState(tx, input.profileId, mediaRefId, input, playedAt);
+    if (!eventAlreadyRecorded) await appendPlaybackEvent(tx, eventKey);
+    return { ...watchState, applied: true, stale: false, duplicate: eventAlreadyRecorded };
   } catch (error) {
     throw storeProblemFromPgError(error);
   }
@@ -488,7 +623,7 @@ export async function listWatchState(
        FROM watch_state ws
        JOIN media_item_ref r ON r.id = ws.media_ref_id
       WHERE ws.profile_id = $1
-      ORDER BY ws.last_played_at DESC
+      ORDER BY ws.last_played_at DESC, ws.media_ref_id
       LIMIT $2`,
     [profileId, options.limit]
   );
@@ -511,7 +646,7 @@ export async function listContinueWatching(
       WHERE ws.profile_id = $1
         AND ws.completed = false
         AND ws.position_ticks > 0
-      ORDER BY ws.last_played_at DESC
+      ORDER BY ws.last_played_at DESC, ws.media_ref_id
       LIMIT $2`,
     [profileId, options.limit]
   );
@@ -647,11 +782,14 @@ export async function claimIdempotencyKey(
 // Canonical fingerprint over the semantic input (the canonical key order of
 // the parsed object is the construction order, which the parser fixes), so a
 // replayed request with reformatted whitespace still counts as the same write.
+// The event time is semantic (RH-0022): a replayed write with a different
+// playedAt is a different event, not the same one reformatted.
 export function fingerprintWatchProgress(input: WatchProgressRecord): string {
   const canonical = JSON.stringify({
     completed: input.completed,
     durationTicks: input.durationTicks ?? null,
     externalId: input.externalId,
+    playedAt: input.playedAt ? input.playedAt.toISOString() : null,
     positionTicks: input.positionTicks,
     source: input.source
   });

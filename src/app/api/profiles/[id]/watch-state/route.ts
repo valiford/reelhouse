@@ -74,10 +74,14 @@ export async function GET(request: Request, context: RouteContext) {
 
 // PUT records progress against a stable (source, external_id) identity: the
 // media ref is resolved or created, the overlay row is upserted, and the
-// append-only playback event is written — atomically. An `Idempotency-Key`
-// header makes retries safe: the same key with the same payload replays
-// without appending duplicate history; the same key with a different payload
-// is a 409.
+// append-only playback event is written — atomically. RH-0022 hardening:
+// an optional `playedAt` orders events (a strictly older timestamped event
+// never regresses newer overlay state), and duplicates never append history
+// twice — an unstamped write identical to the stored overlay is a retry, and
+// an exact replay of a timestamped event is detected in playback_event. An
+// `Idempotency-Key` header makes retries safe: the same key with the same
+// payload replays without appending duplicate history; the same key with a
+// different payload is a 409.
 export async function PUT(request: Request, context: RouteContext) {
   try {
     const { id } = await context.params;
@@ -108,7 +112,11 @@ export async function PUT(request: Request, context: RouteContext) {
       if (!profile) {
         return { status: 404 as const, body: { error: { code: "not_found", message: "profile not found" } } };
       }
-      const input = { ...progress.value, profileId: profileId.value };
+      const input = {
+        ...progress.value,
+        profileId: profileId.value,
+        playedAt: progress.value.playedAt ? new Date(progress.value.playedAt) : undefined
+      };
       const fingerprint = fingerprintWatchProgress(input);
 
       if (idempotencyKey !== undefined) {
@@ -125,13 +133,17 @@ export async function PUT(request: Request, context: RouteContext) {
           // again is then the caller's intent.)
           const existing = await getWatchState(tx, input.profileId, input.source, input.externalId);
           if (existing) {
-            return { status: 200 as const, body: { watchState: existing, idempotentReplay: true } };
+            return {
+              status: 200 as const,
+              body: { watchState: existing, applied: false, stale: false, duplicate: false, idempotentReplay: true }
+            };
           }
         }
       }
 
-      const watchState = await recordWatchProgress(tx, input);
-      return { status: 200 as const, body: { watchState } };
+      const outcome = await recordWatchProgress(tx, input);
+      const { applied, stale, duplicate, ...watchState } = outcome;
+      return { status: 200 as const, body: { watchState, applied, stale, duplicate } };
     });
 
     return NextResponse.json(result.body, { status: result.status });

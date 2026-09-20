@@ -67,7 +67,11 @@ const ITEM_FIELDS = [
   "Etag"
 ].join(",");
 
-async function fetchJson<T>(config: JellyfinSyncConfig, path: string, params: Record<string, string>, fetchImpl: typeof fetch): Promise<T> {
+// One bounded, timeout-guarded JSON GET against the configured Jellyfin
+// server. Exported for the household watch-state reconciliation (RH-0022),
+// which speaks the same server with the same rules; errors are constructed
+// key-free and callers pass them through redactError() as defense in depth.
+export async function jellyfinGetJson<T>(config: JellyfinSyncConfig, path: string, params: Record<string, string>, fetchImpl: typeof fetch): Promise<T> {
   const url = new URL(`${config.baseUrl}${path}`);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
   const controller = new AbortController();
@@ -99,7 +103,7 @@ async function fetchJson<T>(config: JellyfinSyncConfig, path: string, params: Re
 export function createHttpJellyfinClient(config: JellyfinSyncConfig, fetchImpl: typeof fetch = fetch): JellyfinCatalogClient {
   return {
     async listLibraries(): Promise<JellyfinLibraryRaw[]> {
-      const body = await fetchJson<JellyfinLibrariesResponse>(config, "/Library/MediaFolders", {}, fetchImpl);
+      const body = await jellyfinGetJson<JellyfinLibrariesResponse>(config, "/Library/MediaFolders", {}, fetchImpl);
       return body.Items ?? [];
     },
     async listItemPage(libraryExternalId, { startIndex, limit, includeTypes, updatedSince }) {
@@ -114,7 +118,7 @@ export function createHttpJellyfinClient(config: JellyfinSyncConfig, fetchImpl: 
         SortOrder: "Ascending"
       };
       if (updatedSince) params.MinDateLastSaved = updatedSince;
-      const body = await fetchJson<JellyfinItemsResponse>(config, "/Items", params, fetchImpl);
+      const body = await jellyfinGetJson<JellyfinItemsResponse>(config, "/Items", params, fetchImpl);
       return { items: body.Items ?? [], totalRecorded: body.TotalRecordCount ?? 0 };
     }
   };
