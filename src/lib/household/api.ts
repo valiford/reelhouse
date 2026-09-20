@@ -9,6 +9,7 @@
 
 import { NextResponse } from "next/server";
 import { redactError } from "@/lib/db/config";
+import { JellyfinUnavailableError } from "./reconcile.ts";
 import {
   HouseholdConflictError,
   HouseholdInputError,
@@ -59,6 +60,11 @@ export function householdErrorResponse(error: unknown): NextResponse {
   }
   if (error instanceof HouseholdConflictError) {
     return errorResponse(409, "conflict", truncate(error.message));
+  }
+  // Jellyfin is unreachable/unconfigured for a reconciliation (RH-0022):
+  // availability, reported as 503 — never demo data, never a 500.
+  if (error instanceof JellyfinUnavailableError) {
+    return errorResponse(503, "jellyfin_unavailable", truncate(error.message));
   }
 
   const classification = classifyPgError(error);
