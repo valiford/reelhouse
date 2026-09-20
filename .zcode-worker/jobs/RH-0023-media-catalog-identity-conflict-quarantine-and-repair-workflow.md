@@ -1,9 +1,10 @@
 # RH-0023 — Media catalog identity conflict quarantine and repair workflow
 
-**STATUS:** READY
+**STATUS:** REVIEW
 **AGENT:** ZCODE
 **AUTOMATION_ELIGIBLE:** true
 **WAVE:** Pre-8PM reserve
+**BRANCH:** `rh-0023-media-catalog-identity-conflict-quarantine-and-repair-workflow`
 
 ## Goal
 Add explicit quarantine/review tooling for ambiguous Jellyfin-to-media_catalog identity matches, duplicate files, renamed items, missing external IDs, and safe remapping without modifying Jellyfin's internal database.
