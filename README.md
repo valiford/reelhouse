@@ -106,6 +106,21 @@ verification, and rollback/recovery policy, and
 [docs/DB_SMOKE.md](docs/DB_SMOKE.md) for the end-to-end smoke runbook
 (including the pre-acceptance gate for the production Synology database).
 
+## Backup and disaster recovery
+
+```bash
+npm run db:backup -- --out <dir>            # snapshot reelhouse and/or media_catalog
+npm run db:restore-verify -- --from <dir>   # prove the backup restores into a scratch
+npm run db:restore-verify -- --from <dir> --offline   # manifest + files only
+```
+
+The `reelhouse` database holds household state that exists nowhere else —
+back it up and verify the backup regularly. `media_catalog` is rebuildable
+from Jellyfin via `catalog:rebuild`, so a backup there is an optimization,
+not the recovery. Verification restores into a disposable `rh_restore_*`
+scratch database and never touches production. Full runbook:
+[docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md).
+
 ## Media catalog sync
 
 The separate `media_catalog` PostgreSQL 18 database mirrors Jellyfin

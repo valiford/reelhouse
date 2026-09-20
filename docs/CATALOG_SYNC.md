@@ -145,8 +145,8 @@ reconstructible from the source of truth at any time.
 
 Nightly incremental scan; weekly full scan (retirement, deletions);
 rebuild only for disaster recovery or after restoring an empty
-`media_catalog` database. Runbook integration with backup/restore lives
-in RH-0021.
+`media_catalog` database. The backup/restore and DR runbook that consumes
+these commands lives in [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
 
 ## Verification
 
