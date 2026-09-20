@@ -17,10 +17,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 import { CATALOG_URL_VAR } from "./config.ts";
-import { JellyfinSyncError, type JellyfinCatalogClient } from "./jellyfin-client.ts";
+import { JellyfinSyncError } from "./jellyfin-client.ts";
 import type { JellyfinItemRaw, JellyfinLibraryRaw } from "./model.ts";
 import { runCatalogSync } from "./sync.ts";
 import { runMigrations } from "../db/migrator.ts";
+import { FixtureJellyfin, T0, movieFixture } from "./test-fixtures.ts";
 
 const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? "postgresql://reelhouse_test:reelhouse_test@127.0.0.1:55433/reelhouse_test";
@@ -59,64 +60,15 @@ async function createDatabaseIfMissing(adminUrl: string, name: string): Promise<
 async function resetCatalogTables(): Promise<void> {
   await withClient(CATALOG_DATABASE_URL, async (client) => {
     await client.query(
-      "TRUNCATE catalog_item, catalog_library, catalog_quarantine, catalog_genre, catalog_studio, catalog_person, catalog_scan, catalog_sync_state CASCADE"
+      "TRUNCATE catalog_item, catalog_library, catalog_quarantine, catalog_genre, catalog_studio, catalog_person, catalog_scan, catalog_sync_state, catalog_identity_override CASCADE"
     );
   });
 }
 
-// ---- Fixture Jellyfin: an in-memory read-only stand-in for the API ----
-
-class FixtureJellyfin implements JellyfinCatalogClient {
-  libraries: JellyfinLibraryRaw[] = [];
-  items = new Map<string, JellyfinItemRaw[]>();
-  failure: JellyfinSyncError | null = null;
-  lastUpdatedSince: string | null = null;
-
-  async listLibraries(): Promise<JellyfinLibraryRaw[]> {
-    if (this.failure) throw this.failure;
-    return this.libraries;
-  }
-
-  async listItemPage(
-    libraryExternalId: string,
-    options: { startIndex: number; limit: number; includeTypes: string[]; updatedSince?: string }
-  ): Promise<{ items: JellyfinItemRaw[]; totalRecorded: number }> {
-    if (this.failure) throw this.failure;
-    this.lastUpdatedSince = options.updatedSince ?? this.lastUpdatedSince;
-    const all = (this.items.get(libraryExternalId) ?? [])
-      .filter((item) => item.Type !== undefined && options.includeTypes.includes(item.Type))
-      .filter((item) => {
-        if (!options.updatedSince) return true;
-        const saved = typeof item.DateLastSaved === "string" ? item.DateLastSaved : "";
-        return saved !== "" && saved > options.updatedSince;
-      })
-      .sort((a, b) => (a.Id ?? "") < (b.Id ?? "") ? -1 : 1);
-    return { items: all.slice(options.startIndex, options.startIndex + options.limit), totalRecorded: all.length };
-  }
-}
-
 // ---- Shared fixture data ----
-
-const T0 = new Date("2026-09-19T12:00:00.000Z");
 
 function baseEnv(): Record<string, string> {
   return { [CATALOG_URL_VAR]: CATALOG_DATABASE_URL, MEDIA_CATALOG_RETIREMENT_DAYS: "1" };
-}
-
-function movieFixture(id: string, overrides: JellyfinItemRaw = {}): JellyfinItemRaw {
-  return {
-    Id: id,
-    Name: `Movie ${id}`,
-    Type: "Movie",
-    ProductionYear: 2020,
-    Overview: `Overview for ${id}`,
-    ProviderIds: { Imdb: `tt0000${id}` },
-    Genres: ["Drama"],
-    Studios: [{ Name: "Studio One" }],
-    People: [{ Name: "Ada Reel", Type: "Actor", Role: "Lead" }],
-    DateLastSaved: T0.toISOString(),
-    ...overrides
-  };
 }
 
 async function runSync(fixture: FixtureJellyfin, mode: "incremental" | "full" | "rebuild", clock: Date, env: Record<string, string> = baseEnv()) {

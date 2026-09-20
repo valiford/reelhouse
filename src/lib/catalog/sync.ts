@@ -31,6 +31,7 @@ import {
   type CatalogSyncPolicy
 } from "./config.ts";
 import type { JellyfinCatalogClient } from "./jellyfin-client.ts";
+import { SYNC_QUARANTINE_REASONS } from "./review.ts";
 import {
   KIND_RANK,
   mapJellyfinItem,
@@ -164,6 +165,8 @@ export async function runCatalogSync(options: CatalogSyncOptions): Promise<Catal
         try {
           // Catalog content only, in this database only. Jellyfin is
           // read-only to this job; the reelhouse database is never touched.
+          // catalog_identity_override is deliberately absent: operator
+          // identity decisions (RH-0023) survive a rebuild by design.
           await pool.query("TRUNCATE catalog_item, catalog_library, catalog_quarantine, catalog_genre, catalog_studio, catalog_person CASCADE");
           await pool.query(
             "INSERT INTO catalog_sync_state (job, cursor) VALUES ($1, '{}'::jsonb) ON CONFLICT (job) DO UPDATE SET cursor = '{}'::jsonb, last_error = NULL",
@@ -358,7 +361,8 @@ async function verifySchema(pool: Pool): Promise<void> {
     "catalog_item_genre",
     "catalog_item_studio",
     "catalog_item_person",
-    "catalog_quarantine"
+    "catalog_quarantine",
+    "catalog_identity_override"
   ];
   const result = await pool.query<{ table_name: string; present: boolean }>(
     `SELECT table_name, (to_regclass('public.' || table_name) IS NOT NULL) AS present
@@ -437,7 +441,8 @@ async function quarantineLibrary(
     `INSERT INTO catalog_quarantine (source, external_id, reason, detail, payload, first_detected_at, last_detected_at)
      VALUES ('jellyfin', $1, 'invalid_item', $2::jsonb, '{}'::jsonb, $3, $3)
      ON CONFLICT (source, external_id, reason) DO UPDATE
-       SET detail = EXCLUDED.detail, last_detected_at = EXCLUDED.last_detected_at, resolved_at = NULL`,
+       SET detail = EXCLUDED.detail, last_detected_at = EXCLUDED.last_detected_at, resolved_at = NULL,
+           resolution_action = NULL, resolution_note = NULL, resolved_by = NULL`,
     [externalId, JSON.stringify({ reason, entity: "library" }), at]
   );
 }
@@ -573,13 +578,25 @@ async function processPage(
     for (const [key, owner] of dbProviderOwners) {
       if (!caches.claimedProviders.has(key)) caches.claimedProviders.set(key, owner);
     }
+    // Operator identity decisions (RH-0023) take precedence over every
+    // heuristic below: they are the reviewed answer to an earlier conflict.
+    const providerDecisions = await loadProviderOverrides(pool, models);
+    const libraryDecisions = await loadLibraryPins(pool, models.map((model) => model.externalId));
 
     const pending: CatalogItemModel[] = [];
     // Ids already queued from this same page: a payload repeating one id is
     // ambiguous (the second copy must quarantine, not race the first write).
     const queuedInBatch = new Set<string>();
     for (const model of models) {
-      let verdict = classifyAmbiguity(model, library.id, existingByExternalId.get(model.externalId), caches.claimedProviders, seenThisRun);
+      let verdict = classifyAmbiguity(
+        model,
+        { id: library.id, externalId: library.model.externalId },
+        existingByExternalId.get(model.externalId),
+        caches.claimedProviders,
+        seenThisRun,
+        providerDecisions,
+        libraryDecisions
+      );
       if (verdict === null && queuedInBatch.has(model.externalId)) {
         verdict = { reason: "duplicate_external_id", detail: { externalId: model.externalId, seenEarlierInBatch: true } };
       }
@@ -626,9 +643,11 @@ async function processPage(
         continue;
       }
       if (existing.content_hash === model.contentHash) {
+        // library_id moves here too: an operator-pinned item (RH-0023) can
+        // legitimately arrive from its new library with unchanged content.
         await pool.query(
-          "UPDATE catalog_item SET last_seen_at = $2, missing_since = NULL, retired_at = NULL WHERE id = $1 AND (missing_since IS NOT NULL OR retired_at IS NOT NULL OR last_seen_at <> $2)",
-          [existing.id, at]
+          "UPDATE catalog_item SET last_seen_at = $2, missing_since = NULL, retired_at = NULL, library_id = $3 WHERE id = $1 AND (missing_since IS NOT NULL OR retired_at IS NOT NULL OR last_seen_at <> $2 OR library_id <> $3)",
+          [existing.id, at, library.id]
         );
         batchUnchanged += 1;
         writtenExternalIds.push(model.externalId);
@@ -643,11 +662,15 @@ async function processPage(
     }
 
     // A successfully synced item is no longer ambiguous: close any open
-    // quarantine records the operator is waiting on.
+    // quarantine records the operator is waiting on. Only sync-owned reasons
+    // auto-close here — detector rows (duplicate_path, renamed_identity) are
+    // the review workflow's to open and close (RH-0023).
     if (writtenExternalIds.length > 0) {
       await pool.query(
-        "UPDATE catalog_quarantine SET resolved_at = $2 WHERE source = 'jellyfin' AND external_id = ANY($1::text[]) AND resolved_at IS NULL",
-        [writtenExternalIds, at]
+        `UPDATE catalog_quarantine SET resolved_at = $2
+          WHERE source = 'jellyfin' AND external_id = ANY($1::text[])
+            AND resolved_at IS NULL AND reason = ANY($3::text[])`,
+        [writtenExternalIds, at, [...SYNC_QUARANTINE_REASONS]]
       );
     }
 
@@ -667,26 +690,53 @@ type QuarantineVerdict = {
 
 function classifyAmbiguity(
   model: CatalogItemModel,
-  libraryId: string,
+  library: { id: string; externalId: string },
   existing: { library_id: string } | undefined,
   claimedProviders: Map<string, string>,
-  seenThisRun: Set<string>
+  seenThisRun: Set<string>,
+  providerOverrides: Map<string, string>,
+  libraryOverrides: Map<string, string>
 ): QuarantineVerdict {
-  if (existing && existing.library_id !== libraryId) {
+  // An operator library pin (RH-0023) decides where this item belongs. A
+  // scan from the pinned library is the sanctioned answer — even across an
+  // existing row in another library, which becomes an applied move — while a
+  // scan from anywhere else is quarantined with the pin as evidence.
+  const pinnedLibrary = libraryOverrides.get(model.externalId);
+  if (pinnedLibrary !== undefined) {
+    if (pinnedLibrary !== library.externalId) {
+      return {
+        reason: "library_conflict",
+        detail: {
+          claimedLibraryExternalId: library.externalId,
+          existingLibraryId: existing?.library_id ?? null,
+          pinnedToLibrary: pinnedLibrary,
+          viaOverride: true
+        }
+      };
+    }
+  } else if (existing && existing.library_id !== library.id) {
     return {
       reason: "library_conflict",
-      detail: { expectedLibraryId: libraryId, existingLibraryId: existing.library_id }
+      detail: { expectedLibraryId: library.id, existingLibraryId: existing.library_id }
     };
   }
   if (seenThisRun.has(model.externalId)) {
     return { reason: "duplicate_external_id", detail: { externalId: model.externalId, seenEarlierInRun: true } };
   }
   for (const providerId of model.providerIds) {
-    const owner = claimedProviders.get(`${providerId.provider}\u0000${providerId.value}`);
+    const key = `${providerId.provider}\u0000${providerId.value}`;
+    // An operator remap wins over the run's first-writer ownership.
+    const overrideOwner = providerOverrides.get(key);
+    const owner = overrideOwner ?? claimedProviders.get(key);
     if (owner !== undefined && owner !== model.externalId) {
       return {
         reason: "duplicate_provider_id",
-        detail: { provider: providerId.provider, value: providerId.value, heldBy: owner }
+        detail: {
+          provider: providerId.provider,
+          value: providerId.value,
+          heldBy: owner,
+          ...(overrideOwner !== undefined ? { viaOverride: true } : {})
+        }
       };
     }
   }
@@ -718,6 +768,48 @@ async function providerOwners(pool: Pool, models: CatalogItemModel[]): Promise<M
   return out;
 }
 
+// Operator provider-id remaps (catalog_identity_override, RH-0023) covering
+// this page's provider ids: (provider, value) -> canonical owner external id.
+async function loadProviderOverrides(pool: Pool, models: CatalogItemModel[]): Promise<Map<string, string>> {
+  const pairs: Array<[string, string]> = [];
+  const seen = new Set<string>();
+  for (const model of models) {
+    for (const providerId of model.providerIds) {
+      const key = `${providerId.provider}\u0000${providerId.value}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pairs.push([providerId.provider, providerId.value]);
+    }
+  }
+  const out = new Map<string, string>();
+  if (pairs.length === 0) return out;
+  const result = await pool.query<{ provider: string; external_value: string; canonical_external_id: string }>(
+    `SELECT o.provider, o.external_value, o.canonical_external_id
+       FROM catalog_identity_override o
+       JOIN unnest($1::text[], $2::text[]) AS q(provider, external_value)
+         ON o.provider = q.provider AND o.external_value = q.external_value
+      WHERE o.source = 'jellyfin' AND o.kind = 'provider_claim'`,
+    [pairs.map((pair) => pair[0]), pairs.map((pair) => pair[1])]
+  );
+  for (const row of result.rows) out.set(`${row.provider}\u0000${row.external_value}`, row.canonical_external_id);
+  return out;
+}
+
+// Operator library pins for this page's items: item external id -> library
+// external id.
+async function loadLibraryPins(pool: Pool, externalIds: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (externalIds.length === 0) return out;
+  const result = await pool.query<{ external_id: string; canonical_external_id: string }>(
+    `SELECT external_id, canonical_external_id
+       FROM catalog_identity_override
+      WHERE source = 'jellyfin' AND kind = 'library_pin' AND external_id = ANY($1::text[])`,
+    [externalIds]
+  );
+  for (const row of result.rows) out.set(row.external_id, row.canonical_external_id);
+  return out;
+}
+
 async function quarantine(
   pool: Pool,
   externalId: string,
@@ -733,7 +825,10 @@ async function quarantine(
        SET detail = EXCLUDED.detail,
            payload = EXCLUDED.payload,
            last_detected_at = EXCLUDED.last_detected_at,
-           resolved_at = NULL`,
+           resolved_at = NULL,
+           resolution_action = NULL,
+           resolution_note = NULL,
+           resolved_by = NULL`,
     [externalId, reason, JSON.stringify(detail), JSON.stringify(model), at]
   );
 }
