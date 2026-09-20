@@ -124,6 +124,19 @@ the retirement policy are documented in
 missing credentials and never writes to Jellyfin or to the `reelhouse`
 database.
 
+## Catalog read model (search, browse, recommendations)
+
+`GET /api/search`, `GET /api/library`, and `GET /api/catalog/recommendations`
+serve from the `media_catalog` read model when it is configured: bounded
+search with filters and keyset pagination (stable pages even when the catalog
+changes between requests), deterministic rails with explicit missing-art
+facts, and freshness labels (`fresh` / `stale` / `empty`). Without a catalog
+— or when it cannot be reached — search and browse fall back to the live
+Jellyfin API / demo library, and every response names its source and
+degradation explicitly; the recommendations endpoint fails closed with 503.
+See [docs/CATALOG_READ_MODEL.md](docs/CATALOG_READ_MODEL.md) for the
+contracts, bounds, and ordering semantics.
+
 ## Household state API
 
 ReelHouse-owned household state persists in the `reelhouse` PostgreSQL 18
