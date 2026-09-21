@@ -1,6 +1,6 @@
 # RH-0024 — Real Synology PostgreSQL 18 ReelHouse connectivity and least-privilege role smoke
 
-**STATUS:** READY
+**STATUS:** REVIEW
 **AGENT:** ZCODE
 **AUTOMATION_ELIGIBLE:** true
 **WAVE:** 2026-09-21 tomorrow priority
