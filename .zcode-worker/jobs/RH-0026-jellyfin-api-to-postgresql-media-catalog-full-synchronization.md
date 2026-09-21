@@ -1,6 +1,6 @@
 # RH-0026 — Jellyfin API to PostgreSQL media_catalog full synchronization
 
-**STATUS:** READY
+**STATUS:** REVIEW
 **AGENT:** ZCODE
 **AUTOMATION_ELIGIBLE:** true
 **WAVE:** 2026-09-21 tomorrow priority
