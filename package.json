@@ -8,9 +8,13 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/lib/db/config.test.ts src/lib/db/migrator.test.ts src/lib/jellyfin-health.test.ts",
-    "test:int": "node --test src/lib/db/integration.int.test.ts",
-    "db:migrate": "node scripts/db-migrate.ts"
+    "test": "node --test src/lib/db/config.test.ts src/lib/db/migrator.test.ts src/lib/jellyfin-health.test.ts src/lib/catalog/config.test.ts src/lib/catalog/model.test.ts src/lib/catalog/client.test.ts",
+    "test:int": "node --test src/lib/db/integration.int.test.ts src/lib/catalog/catalog.int.test.ts",
+    "db:migrate": "node scripts/db-migrate.ts",
+    "catalog:migrate": "node scripts/catalog-migrate.ts",
+    "catalog:sync": "node scripts/catalog-sync.ts",
+    "catalog:sync:full": "node scripts/catalog-sync.ts --mode full",
+    "catalog:sync:rebuild": "node scripts/catalog-sync.ts --mode rebuild"
   },
   "dependencies": {
     "next": "16.0.1",
