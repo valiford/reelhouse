@@ -99,6 +99,15 @@ npm test         # hermetic unit matrices
 npm run test:int # integration + least-privilege role smoke (disposable local PG18)
 ```
 
+### Media catalog (PostgreSQL 18, separate database)
+
+A normalized mirror of the Jellyfin library lives in a separate
+`media_catalog` database, populated only through the Jellyfin HTTP API by
+`npm run catalog:sync` (incremental by default; `catalog:sync:full` and
+`catalog:sync:rebuild` for deep passes and recovery). Identity, provenance,
+retirement, quarantine, and the least-privilege role model are documented in
+[docs/CATALOG_SYNC.md](docs/CATALOG_SYNC.md).
+
 ## Security note
 
 Media is mounted read-only. Do not expose ports 8096 or 3210 directly to the public Internet. Use a VPN such as Tailscale for remote access.

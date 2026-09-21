@@ -129,3 +129,6 @@ committed passwords (`reelhouse_owner_dev`, `reelhouse_app_dev`) exist solely
 for that throwaway container. PG18 note: data volumes mount at
 `/var/lib/postgresql` (18+ creates a major-version subdirectory; mounting
 `.../data` aborts init).
+
+The separate `media_catalog` database (Jellyfin library mirror) has its own
+documentation: [CATALOG_SYNC.md](CATALOG_SYNC.md).
