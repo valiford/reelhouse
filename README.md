@@ -85,6 +85,20 @@ Then check `GET /` (app shell), `GET /api/library`, and
 full imported-source baseline: deployment mapping, data authorities,
 and the PostgreSQL 18 migration surface.
 
+### Database (PostgreSQL 18)
+
+Server-side only; clients never see database credentials. `DATABASE_URL`
+(blank = demo mode) configures the least-privilege application role;
+`npm run db:migrate` applies the versioned migrations in `db/migrations/`
+with the owner role. `GET /api/health` reports database readiness, migration
+state, and Jellyfin reachability. Full configuration, role model, and the
+verification runbook: [docs/DATABASE.md](docs/DATABASE.md).
+
+```bash
+npm test         # hermetic unit matrices
+npm run test:int # integration + least-privilege role smoke (disposable local PG18)
+```
+
 ## Security note
 
 Media is mounted read-only. Do not expose ports 8096 or 3210 directly to the public Internet. Use a VPN such as Tailscale for remote access.
