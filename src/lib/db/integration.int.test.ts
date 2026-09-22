@@ -70,26 +70,46 @@ function needsDb(t: import("node:test").TestContext): { migrate: DatabaseConfig;
   return { migrate: migrateConfig, app: appConfig };
 }
 
+// This suite pins the RH-0030 connectivity contract and is written to
+// tolerate a growing migration history (RH-0031+ append catalog/household
+// migrations to db/migrations): assertions count "version 1 applied,
+// everything pending applied, re-runs apply nothing" rather than exact
+// totals, so the contract holds as the directory evolves.
+// Resets the shared disposable database to an empty public schema (the
+// disposable profile holds no real data). Growing migration history means a
+// bare bookkeeping drop is no longer enough: DDL migrations would collide
+// with tables from an earlier apply.
+async function resetPublicSchema(client: Client): Promise<void> {
+  await client.query(`DO $$ DECLARE r record; BEGIN
+    FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'schema_migrations') LOOP
+      EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
+    END LOOP;
+  END $$;`);
+  await client.query("DROP TABLE IF EXISTS public.schema_migrations");
+  await client.query("DROP TABLE IF EXISTS public.rh0030_probe");
+}
+
 test("migrations apply as the owner role and re-apply is a no-op", async (t) => {
   const { migrate } = needsDb(t);
   await withClient(migrate, async (client) => {
-    await client.query("DROP TABLE IF EXISTS public.schema_migrations");
-    await client.query("DROP TABLE IF EXISTS public.rh0030_probe");
+    await resetPublicSchema(client);
   });
 
   const first = await runMigrations(migrate, MIGRATIONS_DIR, appConfig?.user);
-  assert.deepEqual(first.appliedNow, [1]);
+  assert.ok(first.appliedNow.length >= 1, "at least the grants baseline applies");
+  assert.equal(first.appliedNow[0], 1);
   assert.equal(first.skipped, 0);
 
   const second = await runMigrations(migrate, MIGRATIONS_DIR, appConfig?.user);
   assert.deepEqual(second.appliedNow, []);
-  assert.equal(second.skipped, 1);
+  assert.equal(second.skipped, first.appliedNow.length);
 
   await withClient(migrate, async (client) => {
     const rows = await client.query<{ version: number; name: string; checksum: string }>(
       "SELECT version, name, checksum FROM public.schema_migrations ORDER BY version"
     );
-    assert.equal(rows.rows.length, 1);
+    assert.equal(rows.rows.length, first.appliedNow.length);
+    assert.equal(rows.rows[0].version, 1);
     assert.equal(rows.rows[0].name, "app_role_grants_baseline");
     assert.match(rows.rows[0].checksum, /^[0-9a-f]{64}$/);
   });
@@ -120,7 +140,7 @@ test("grants baseline: app role gets DML on owner tables and never DDL", async (
 
       // Migration bookkeeping is readable, never writable.
       const book = await client.query<{ count: string }>("SELECT count(*) FROM public.schema_migrations");
-      assert.equal(Number(book.rows[0].count), 1);
+      assert.ok(Number(book.rows[0].count) >= 1);
       await assert.rejects(client.query("DELETE FROM public.schema_migrations"), /permission denied/);
     });
 
@@ -166,6 +186,13 @@ test("edited migration history fails closed before executing anything", async (t
   const tampered = mkdtempSync(join(tmpdir(), "reelhouse-tampered-"));
   try {
     writeFileSync(join(tampered, "0001_app_role_grants_baseline.sql"), "-- tampered content\nSELECT 1;\n", "utf8");
+    // Snapshot the bookkeeping row count so the assertion proves nothing was
+    // added by the rejected run, whatever the current history length is.
+    let before = 0;
+    await withClient(migrate, async (client) => {
+      const rows = await client.query<{ count: string }>("SELECT count(*) FROM public.schema_migrations");
+      before = Number(rows.rows[0].count);
+    });
     await assert.rejects(
       runMigrations(migrate, tampered, appConfig?.user),
       /changed on disk after being applied/
@@ -173,7 +200,7 @@ test("edited migration history fails closed before executing anything", async (t
     // Nothing was re-applied or inserted by the rejected run.
     await withClient(migrate, async (client) => {
       const rows = await client.query<{ count: string }>("SELECT count(*) FROM public.schema_migrations");
-      assert.equal(Number(rows.rows[0].count), 1);
+      assert.equal(Number(rows.rows[0].count), before);
     });
   } finally {
     rmSync(tampered, { recursive: true, force: true });
@@ -200,11 +227,13 @@ test("migrator as the app role fails closed on a fresh database", async (t) => {
     });
     // The owner pipeline on the same fresh database succeeds end to end.
     const run = await runMigrations(tmpOwner, MIGRATIONS_DIR, app.user);
-    assert.deepEqual(run.appliedNow, [1]);
+    assert.equal(run.appliedNow[0], 1);
+    assert.ok(run.appliedNow.length >= 1);
     const status = await checkMigrations(tmpOwner, MIGRATIONS_DIR);
     assert.equal(status.state, "ok");
-    assert.equal(status.applied, 1);
+    assert.equal(status.applied, run.appliedNow.length);
     assert.equal(status.pending, 0);
+    assert.equal(status.lastVersion, run.appliedNow.length);
   } finally {
     await withClient(migrate, async (client) => {
       await client.query(`DROP DATABASE IF EXISTS ${TMP_DB} WITH (FORCE)`);
@@ -229,9 +258,10 @@ test("pool-backed readiness summary matches the owner-role status", async (t) =>
     }
   });
   assert.equal(summary.state, "ok");
-  assert.equal(summary.applied, 1);
+  const summaryApplied = summary.applied ?? 0;
+  assert.ok(summaryApplied >= 1);
   assert.equal(summary.pending, 0);
-  assert.equal(summary.lastVersion, 1);
+  assert.equal(summary.lastVersion, summaryApplied);
 
   // The same summary over an app-role connection to a database whose
   // bookkeeping table is missing reports nothing applied, not an error.
@@ -253,7 +283,9 @@ test("pool-backed readiness summary matches the owner-role status", async (t) =>
         await client.end();
       }
     });
-    assert.deepEqual(fresh, { state: "ok", applied: 0, pending: 1 });
+    assert.equal(fresh.state, "ok");
+    assert.equal(fresh.applied, 0);
+    assert.ok((fresh.pending ?? 0) >= 1, "a fresh database reports the whole history as pending");
   } finally {
     await withClient(migrate, async (client) => {
       await client.query(`DROP DATABASE IF EXISTS ${TMP_DB} WITH (FORCE)`);
@@ -264,12 +296,12 @@ test("pool-backed readiness summary matches the owner-role status", async (t) =>
 test("checkMigrations reports a fresh database as pending, not in error", async (t) => {
   const { migrate } = needsDb(t);
   await withClient(migrate, async (client) => {
-    await client.query("DROP TABLE IF EXISTS public.schema_migrations");
+    await resetPublicSchema(client);
   });
   const status = await checkMigrations(migrate, MIGRATIONS_DIR);
   assert.equal(status.state, "ok");
   assert.equal(status.applied, 0);
-  assert.equal(status.pending, 1);
+  assert.ok((status.pending ?? 0) >= 1);
   // Restore the applied state for any later inspection.
   await runMigrations(migrate, MIGRATIONS_DIR, appConfig?.user);
 });

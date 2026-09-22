@@ -19,6 +19,7 @@ nothing is written to disk, bundled, or echoed.
 | `src/lib/jellyfin-health.ts` | Bounded `/System/Info/Public` reachability probe for `/api/health` (no API key sent). |
 | `src/app/api/health/route.ts` | Readiness: database (fail-closed) + migration summary + Jellyfin (informational). |
 | `docker-compose.dev-db.yml` | Disposable loopback PostgreSQL 18 for development/verification. |
+| `src/lib/catalog/`, `scripts/catalog-sync.ts` | Media catalog schema/sync built on this layer (`npm run catalog:sync`). See [CATALOG.md](CATALOG.md). |
 
 ## Environment
 
