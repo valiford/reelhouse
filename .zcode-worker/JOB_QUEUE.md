@@ -6,7 +6,6 @@ The highest-priority READY job with satisfied dependencies and `AUTOMATION_ELIGI
 
 | Priority | Job ID | Status | Agent | Description |
 |---:|---|---|---|---|
-| 1 | RH-0030 | READY | ZCODE | Synology PostgreSQL 18 ReelHouse production connectivity completion |
 | 2 | RH-0031 | READY | ZCODE | Jellyfin full-library dataload into PostgreSQL media_catalog |
 | 3 | RH-0032 | READY | ZCODE | Incremental media_catalog refresh and change-history pipeline |
 | 4 | RH-0033 | READY | ZCODE | Household profile preferences favorites and watch-state dataload |
@@ -54,7 +53,9 @@ _None._
 
 ## Review Queue
 
-_None._
+| Priority | Job ID | Status | Agent | Description |
+|---:|---|---|---|---|
+| 1 | RH-0030 | REVIEW | ZCODE | Synology PostgreSQL 18 ReelHouse production connectivity completion |
 
 ## Completed / Integrated
 

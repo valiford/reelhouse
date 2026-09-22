@@ -1,6 +1,6 @@
 # RH-0030 — Synology PostgreSQL 18 ReelHouse production connectivity completion
 
-**STATUS:** READY
+**STATUS:** REVIEW
 **AGENT:** ZCODE
 **AUTOMATION_ELIGIBLE:** true
 **WAVE:** 2026-09-22 today priority
