@@ -94,6 +94,17 @@ with the owner role. `GET /api/health` reports database readiness, migration
 state, and Jellyfin reachability. Full configuration, role model, and the
 verification runbook: [docs/DATABASE.md](docs/DATABASE.md).
 
+### Media catalog sync
+
+The media catalog (the `media_*` tables) is a normalized, provenance-
+preserving mirror of the Jellyfin library, loaded server-side with
+`npm run catalog:sync` — libraries, movies, series, seasons, episodes,
+people, genres, studios, file state, external IDs, and per-run sync history.
+Jellyfin stays the playback/library authority and is only ever reached
+through its API. Schema, identity model, reconciliation semantics, and the
+deterministic verification workflow (including a local Jellyfin stub):
+[docs/CATALOG.md](docs/CATALOG.md).
+
 ```bash
 npm test         # hermetic unit matrices
 npm run test:int # integration + least-privilege role smoke (disposable local PG18)
