@@ -1,0 +1,127 @@
+{
+  "profiles": [
+    {
+      "name": "V’Ali",
+      "initials": "VA",
+      "isDefault": true,
+      "jellyfinUserId": "jf-user-vali",
+      "preferences": {
+        "theme": "dark",
+        "autoplay_next": true,
+        "preferred_audio_language": "eng"
+      },
+      "favorites": [
+        { "jellyfinId": "mov-arrival", "addedAt": "2026-08-01T12:00:00Z" },
+        { "jellyfinId": "mov-citizen", "addedAt": "2026-08-14T20:45:00Z" },
+        { "jellyfinId": "ser-demo" }
+      ],
+      "watchlists": [
+        {
+          "name": "Movie Night",
+          "entries": [
+            { "jellyfinId": "mov-twin", "addedAt": "2026-09-01T09:30:00Z" },
+            { "jellyfinId": "ep-demo-1" }
+          ]
+        },
+        {
+          "name": "Home Video Curation",
+          "entries": [{ "jellyfinId": "vid-home" }]
+        }
+      ],
+      "homeRows": [
+        { "kind": "continue_watching", "title": "Continue Watching" },
+        { "kind": "recently_added", "title": "Recently Added" },
+        { "kind": "library", "title": "Movies", "config": { "library_jellyfin_id": "lib-movies" } },
+        { "kind": "library", "title": "TV Shows", "config": { "library_jellyfin_id": "lib-tv" } },
+        { "kind": "collection", "title": "Family Picks", "config": { "collection_slug": "family_picks" } },
+        { "kind": "watchlist", "title": "Movie Night", "config": { "watchlist_slug": "movie_night" } }
+      ],
+      "watchState": [
+        {
+          "jellyfinId": "ep-demo-1",
+          "positionTicks": 600000000,
+          "durationTicks": 1500000000,
+          "lastPlayedAt": "2026-09-20T02:11:00Z"
+        },
+        {
+          "jellyfinId": "mov-bare",
+          "completed": true,
+          "hiddenFromContinue": true,
+          "firstPlayedAt": "2026-09-12T21:00:00Z",
+          "lastPlayedAt": "2026-09-12T22:31:00Z"
+        }
+      ],
+      "playbackHistory": [
+        { "jellyfinId": "ep-demo-1", "playedAt": "2026-09-20T01:40:00Z", "positionTicks": 0 },
+        {
+          "jellyfinId": "ep-demo-1",
+          "playedAt": "2026-09-20T02:11:00Z",
+          "positionTicks": 600000000,
+          "durationTicks": 1500000000
+        },
+        {
+          "jellyfinId": "mov-bare",
+          "playedAt": "2026-09-12T22:31:00Z",
+          "positionTicks": 1500000000,
+          "durationTicks": 1500000000,
+          "completed": true
+        }
+      ]
+    },
+    {
+      "name": "Nicole",
+      "initials": "NF",
+      "preferences": {
+        "theme": "light",
+        "reduced_motion": true
+      },
+      "favorites": [{ "jellyfinId": "vid-home", "addedAt": "2026-07-15T18:00:00Z" }],
+      "watchlists": [
+        {
+          "name": "Weekend Picks",
+          "entries": [{ "jellyfinId": "mov-arrival", "addedAt": "2026-09-15T08:00:00Z" }]
+        }
+      ],
+      "homeRows": [
+        { "kind": "continue_watching", "title": "Continue Watching" },
+        { "kind": "favorites", "title": "Nicole's Favorites" },
+        { "kind": "collection", "title": "Family Picks", "config": { "collection_slug": "family_picks" } }
+      ],
+      "watchState": [
+        {
+          "jellyfinId": "ep-demo-2",
+          "positionTicks": 240000000,
+          "durationTicks": 1500000000,
+          "lastPlayedAt": "2026-09-19T20:05:00Z"
+        }
+      ],
+      "playbackHistory": [
+        {
+          "jellyfinId": "ep-demo-2",
+          "playedAt": "2026-09-19T20:05:00Z",
+          "positionTicks": 240000000,
+          "durationTicks": 1500000000
+        }
+      ]
+    }
+  ],
+  "collections": [
+    {
+      "name": "Family Picks",
+      "description": "Household-curated picks for the whole family",
+      "entries": [
+        { "jellyfinId": "mov-arrival" },
+        { "jellyfinId": "mov-citizen", "addedAt": "2026-08-14T21:00:00Z" },
+        { "jellyfinId": "vid-home" },
+        { "jellyfinId": "ser-demo" }
+      ]
+    },
+    {
+      "name": "Weekend Home Videos",
+      "entries": [
+        { "jellyfinId": "vid-home" },
+        { "jellyfinId": "mov-blank" }
+      ]
+    }
+  ]
+}
