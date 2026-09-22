@@ -1,6 +1,7 @@
-// Full-library catalog sync CLI: Jellyfin API → PostgreSQL media_catalog.
+// Catalog sync CLI: Jellyfin API → PostgreSQL media_catalog.
 //
-//   npm run catalog:sync
+//   npm run catalog:sync                   # full reconciliation
+//   npm run catalog:sync -- --incremental  # watermark-windowed delta refresh
 //
 // Environment (all required — the run fails closed without them):
 //   DATABASE_URL        Application role URL (least privilege, DML only).
@@ -12,12 +13,15 @@
 //   CATALOG_SYNC_BATCH_SIZE        Page/transaction size (50–1000, default 500).
 //   DATABASE_* tuning              See docs/DATABASE.md.
 //
-// Migrations must already be applied (`npm run db:migrate`). Every echoed
-// value is scrubbed of the Jellyfin URL and API key and of the database URL.
+// The incremental mode requires a baseline: run a full sync at least once so
+// media_sync_state carries a watermark. Migrations must already be applied
+// (`npm run db:migrate`). Every echoed value is scrubbed of the Jellyfin URL
+// and API key and of the database URL.
 
 import { Pool } from "pg";
 import { loadDatabaseConfig } from "../src/lib/db/config.ts";
 import { CatalogSyncError, runFullCatalogSync } from "../src/lib/catalog/sync.ts";
+import { runIncrementalCatalogSync } from "../src/lib/catalog/incremental.ts";
 import {
   JellyfinCatalogSource,
   readCatalogSyncEnv,
@@ -29,6 +33,12 @@ function fail(message: string): never {
   console.error(`catalog:sync ${message}`);
   process.exit(1);
 }
+
+const args = process.argv.slice(2);
+if (args.some((arg) => arg !== "--incremental")) {
+  fail(`accepts no arguments except --incremental (got ${args.join(" ")})`);
+}
+const incremental = args.includes("--incremental");
 
 const dbResult = loadDatabaseConfig(process.env);
 if (dbResult.kind === "unconfigured") {
@@ -67,25 +77,48 @@ const pool = new Pool({
 
 const secrets = [process.env.JELLYFIN_URL?.trim() ?? "", jellyfinUrl, jellyfinApiKey, process.env.DATABASE_URL?.trim() ?? ""];
 
+function describeCounters(counters: {
+  librariesSeen: number;
+  itemsSeen: number;
+  itemsUpserted: number;
+  itemsTombstoned: number;
+  itemsRestored: number;
+  itemsQuarantined: number;
+  pagesFetched: number;
+}): string {
+  return (
+    `libraries=${counters.librariesSeen} items=${counters.itemsSeen} ` +
+    `upserted=${counters.itemsUpserted} tombstoned=${counters.itemsTombstoned} ` +
+    `restored=${counters.itemsRestored} quarantined=${counters.itemsQuarantined} ` +
+    `pages=${counters.pagesFetched}`
+  );
+}
+
 try {
   const source = new JellyfinCatalogSource(jellyfinUrl, jellyfinApiKey, fetch, tuning.timeoutMs);
-  const result = await runFullCatalogSync(source, createPgSyncExecutor(pool), {
-    pageSize: tuning.pageSize
-  });
-  console.log(
-    `catalog:sync succeeded — run #${result.runId} in ${result.durationMs}ms: ` +
-      `libraries=${result.librariesSeen} items=${result.itemsSeen} ` +
-      `upserted=${result.itemsUpserted} tombstoned=${result.itemsTombstoned} ` +
-      `skipped=${result.itemsSkipped} pages=${result.pagesFetched}`
-  );
+  const executor = createPgSyncExecutor(pool);
+  if (incremental) {
+    const result = await runIncrementalCatalogSync(source, executor, { pageSize: tuning.pageSize });
+    console.log(
+      `catalog:sync incremental succeeded — run #${result.runId} in ${result.durationMs}ms: ` +
+        `${describeCounters(result)} changes=${result.changesRecorded} ` +
+        `window=${result.windowStart} watermark=${result.watermark}`
+    );
+  } else {
+    const result = await runFullCatalogSync(source, executor, { pageSize: tuning.pageSize });
+    console.log(
+      `catalog:sync full succeeded — run #${result.runId} in ${result.durationMs}ms: ` +
+        `${describeCounters(result)} changes=${result.changesRecorded} watermark=${result.watermark}`
+    );
+  }
 } catch (error) {
   if (error instanceof CatalogSyncError) {
+    const summary = error.summary;
     console.error(
-      `catalog:sync failed — run #${error.summary.runId} recorded as failed ` +
-        `(libraries=${error.summary.librariesSeen} items=${error.summary.itemsSeen} ` +
-        `upserted=${error.summary.itemsUpserted} pages=${error.summary.pagesFetched})`
+      `catalog:sync ${incremental ? "incremental " : ""}failed — run #${summary.runId} recorded as failed ` +
+        `(${describeCounters(summary)})`
     );
-    console.error(`catalog:sync error: ${scrub(error.summary.errorDetail, secrets)}`);
+    console.error(`catalog:sync error: ${scrub(summary.errorDetail, secrets)}`);
   } else {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`catalog:sync failed: ${scrub(message, secrets)}`);

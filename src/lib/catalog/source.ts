@@ -26,6 +26,20 @@ export interface CatalogItemsPage {
 export interface CatalogSource {
   listLibraries(): Promise<CatalogLibrary[]>;
   fetchItemsPage(libraryJellyfinId: string, startIndex: number, limit: number): Promise<CatalogItemsPage>;
+  // Delta pass: items of one library the source has saved at or after the
+  // given ISO timestamp, cursor-paginated. Scoped per library so library
+  // attribution comes from the query, not from payload ancestry. Deletions
+  // cannot appear here (vanished items are never "saved") — removal
+  // detection is the presence sweep's job.
+  fetchChangedItemsPage(
+    libraryJellyfinId: string,
+    sinceIso: string,
+    startIndex: number,
+    limit: number
+  ): Promise<CatalogItemsPage>;
+  // Presence sweep: identity-only pages for one library. Cheap on purpose —
+  // the sweep only answers "which ids exist in this library right now".
+  fetchLibraryItemIdsPage(libraryJellyfinId: string, startIndex: number, limit: number): Promise<CatalogItemsPage>;
 }
 
 export const CATALOG_SYNC_DEFAULTS = {
@@ -141,6 +155,7 @@ export class JellyfinCatalogSource implements CatalogSource {
         "ProviderIds",
         "MediaSources",
         "DateCreated",
+        "DateLastSaved",
         "OriginalTitle",
         "OfficialRating",
         "PremiereDate",
@@ -153,7 +168,51 @@ export class JellyfinCatalogSource implements CatalogSource {
       SortBy: "SortName",
       SortOrder: "Ascending"
     });
-    const body = await this.getJson(`Items?${params.toString()}`);
+    return this.readItemsPage(`Items?${params.toString()}`);
+  }
+
+  async fetchChangedItemsPage(
+    libraryJellyfinId: string,
+    sinceIso: string,
+    startIndex: number,
+    limit: number
+  ): Promise<CatalogItemsPage> {
+    const params = new URLSearchParams({
+      ParentId: libraryJellyfinId,
+      Recursive: "true",
+      IncludeItemTypes: "Movie,Series,Season,Episode,Video",
+      Fields: ["DateCreated", "DateLastSaved"].join(","),
+      // Delta cursor: only what the source saved at/after the watermark
+      // window; sorted deterministically so cursor pages are stable.
+      MinDateLastSaved: sinceIso,
+      SortBy: "SortName",
+      SortOrder: "Ascending",
+      StartIndex: String(startIndex),
+      Limit: String(limit)
+    });
+    return this.readItemsPage(`Items?${params.toString()}`);
+  }
+
+  async fetchLibraryItemIdsPage(
+    libraryJellyfinId: string,
+    startIndex: number,
+    limit: number
+  ): Promise<CatalogItemsPage> {
+    const params = new URLSearchParams({
+      ParentId: libraryJellyfinId,
+      Recursive: "true",
+      IncludeItemTypes: "Movie,Series,Season,Episode,Video",
+      Fields: "Id",
+      SortBy: "SortName",
+      SortOrder: "Ascending",
+      StartIndex: String(startIndex),
+      Limit: String(limit)
+    });
+    return this.readItemsPage(`Items?${params.toString()}`);
+  }
+
+  private async readItemsPage(path: string): Promise<CatalogItemsPage> {
+    const body = await this.getJson(path);
     const items = Array.isArray(body.Items) ? body.Items : [];
     const totalRecordCount =
       typeof body.TotalRecordCount === "number" && Number.isSafeInteger(body.TotalRecordCount)

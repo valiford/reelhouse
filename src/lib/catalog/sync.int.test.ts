@@ -27,7 +27,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { Client, Pool } from "pg";
 import { loadDatabaseConfig, type DatabaseConfig } from "../db/config.ts";
-import { runMigrations } from "../db/migrator.ts";
+import { loadMigrationFiles, runMigrations } from "../db/migrator.ts";
 import { createPgSyncExecutor } from "./pg-executor.ts";
 import { CatalogSyncError, runFullCatalogSync } from "./sync.ts";
 import type { CatalogLibrary, CatalogRawItem, CatalogSource, CatalogItemsPage } from "./source.ts";
@@ -94,6 +94,31 @@ class FakeCatalogSource implements CatalogSource {
       throw new Error(`simulated Jellyfin outage for library ${libraryJellyfinId}`);
     }
     const items = this.itemsByLibrary.get(libraryJellyfinId) ?? [];
+    return { items: items.slice(startIndex, startIndex + limit), totalRecordCount: items.length };
+  }
+
+  // The RH-0031 fixtures carry no DateLastSaved, so the delta window of a
+  // seeded baseline never selects them — the full-sync scenarios stay
+  // exactly as scoped.
+  async fetchChangedItemsPage(
+    libraryJellyfinId: string,
+    sinceIso: string,
+    startIndex: number,
+    limit: number
+  ): Promise<CatalogItemsPage> {
+    const threshold = new Date(sinceIso);
+    const items = (this.itemsByLibrary.get(libraryJellyfinId) ?? []).filter(
+      (entry) => typeof entry.DateLastSaved === "string" && new Date(entry.DateLastSaved) >= threshold
+    );
+    return { items: items.slice(startIndex, startIndex + limit), totalRecordCount: items.length };
+  }
+
+  async fetchLibraryItemIdsPage(
+    libraryJellyfinId: string,
+    startIndex: number,
+    limit: number
+  ): Promise<CatalogItemsPage> {
+    const items = (this.itemsByLibrary.get(libraryJellyfinId) ?? []).map((entry) => ({ Id: entry.Id }));
     return { items: items.slice(startIndex, startIndex + limit), totalRecordCount: items.length };
   }
 }
@@ -222,7 +247,11 @@ async function withFreshCatalog(
 
   try {
     const applied = await runMigrations(migrateTemp, MIGRATIONS_DIR, appTemp.user);
-    assert.equal(applied.appliedNow.length, 5, "all five migrations apply to a fresh database");
+    assert.deepEqual(
+      applied.appliedNow,
+      loadMigrationFiles(MIGRATIONS_DIR).map((file) => file.version),
+      "all on-disk migrations apply to a fresh database"
+    );
     await fn({ migrate: migrateTemp, app: appTemp, appPool });
   } finally {
     await appPool.end();
@@ -321,12 +350,13 @@ async function lastRun(pool: Pool): Promise<Record<string, unknown>> {
 test("catalog migrations apply idempotently and create the media_catalog tables", async (t) => {
   await withFreshCatalog(t, async (db) => {
     await withClient(db.migrate, async (client) => {
+      const expectedVersions = loadMigrationFiles(MIGRATIONS_DIR).map((file) => file.version);
       const applied = await client.query<{ version: number; name: string }>(
         "SELECT version, name FROM schema_migrations ORDER BY version"
       );
       assert.deepEqual(
         applied.rows.map((row) => row.version),
-        [1, 2, 3, 4, 5]
+        expectedVersions
       );
       const expected = [
         "media_libraries",
@@ -342,14 +372,14 @@ test("catalog migrations apply idempotently and create the media_catalog tables"
       ];
       const tables = await client.query<{ table_name: string }>(
         `SELECT table_name FROM information_schema.tables
-         WHERE table_schema = 'public' AND table_name IN ('media_libraries','media_items','media_genres',
-           'media_studios','media_people','media_item_genres','media_item_studios','media_item_people',
-           'media_item_provider_ids','media_sync_runs')
-         ORDER BY table_name`
+         WHERE table_schema = 'public' AND table_name = ANY($1::text[])
+         ORDER BY table_name`,
+        [expected]
       );
       assert.deepEqual(
         tables.rows.map((row) => row.table_name),
-        [...expected].sort()
+        [...expected].sort(),
+        "every media_catalog table exists (later migrations may add more)"
       );
     });
 

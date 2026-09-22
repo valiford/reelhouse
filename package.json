@@ -8,8 +8,8 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/lib/db/config.test.ts src/lib/db/migrator.test.ts src/lib/jellyfin-health.test.ts src/lib/catalog/normalize.test.ts src/lib/catalog/source.test.ts",
-    "test:int": "node --test src/lib/db/integration.int.test.ts src/lib/catalog/sync.int.test.ts",
+    "test": "node --test src/lib/db/config.test.ts src/lib/db/migrator.test.ts src/lib/jellyfin-health.test.ts src/lib/catalog/normalize.test.ts src/lib/catalog/source.test.ts src/lib/catalog/incremental.test.ts",
+    "test:int": "node --test src/lib/db/integration.int.test.ts src/lib/catalog/sync.int.test.ts src/lib/catalog/incremental.int.test.ts",
     "db:migrate": "node scripts/db-migrate.ts",
     "catalog:sync": "node scripts/catalog-sync.ts"
   },
