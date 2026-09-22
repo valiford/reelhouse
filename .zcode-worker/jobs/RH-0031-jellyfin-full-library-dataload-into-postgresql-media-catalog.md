@@ -1,6 +1,6 @@
 # RH-0031 — Jellyfin full-library dataload into PostgreSQL media_catalog
 
-**STATUS:** READY
+**STATUS:** REVIEW
 **AGENT:** ZCODE
 **AUTOMATION_ELIGIBLE:** true
 **WAVE:** 2026-09-22 today priority
