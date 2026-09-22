@@ -100,6 +100,12 @@ Current migrations:
 
 1. `0001_app_role_grants_baseline.sql` — grants the application role DML on
    future owner-created tables/sequences and read-only migration bookkeeping.
+2. `0002`–`0005` — the media catalog family (`media_*`; see
+   [CATALOG.md](CATALOG.md)).
+3. `0006_household_state.sql` — the household state family
+   (`household_*`; profiles, preferences, Jellyfin links, favorites,
+   watchlists, collections, home rows, watch state, playback history,
+   import runs; see [HOUSEHOLD.md](HOUSEHOLD.md)).
 
 ## Readiness contract (`GET /api/health`)
 

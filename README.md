@@ -105,6 +105,21 @@ through its API. Schema, identity model, reconciliation semantics, and the
 deterministic verification workflow (including a local Jellyfin stub):
 [docs/CATALOG.md](docs/CATALOG.md).
 
+### Household state import
+
+Household-owned state — profiles, preferences, favorites, watchlists,
+curated collections, home-screen rows, the continue-watching overlay,
+playback history, and Jellyfin account/item links — lives in the
+`household_*` tables and is loaded server-side with
+`npm run household:import -- path/to/snapshot.json`. A snapshot is a
+complete JSON description of the household; the import is idempotent
+(re-importing an unchanged snapshot writes nothing), tombstones instead of
+deleting (so re-adding preserves original history), archives absent
+profiles without touching their data, and structurally isolates every
+profile. Item links resolve against the media catalog automatically as the
+catalog catches up. Schema, identity model, manifest contract, and
+verification: [docs/HOUSEHOLD.md](docs/HOUSEHOLD.md).
+
 ```bash
 npm test         # hermetic unit matrices
 npm run test:int # integration + least-privilege role smoke (disposable local PG18)
