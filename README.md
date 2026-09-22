@@ -108,6 +108,16 @@ A normalized mirror of the Jellyfin library lives in a separate
 retirement, quarantine, and the least-privilege role model are documented in
 [docs/CATALOG_SYNC.md](docs/CATALOG_SYNC.md).
 
+### Household state (PostgreSQL 18, API persistence)
+
+Profiles, per-profile preferences, favorites, watchlists, curated
+collections, the continue-watching overlay, the append-only playback
+history, and Jellyfin item/account links persist in the `reelhouse`
+database behind `/api/profiles`, `/api/favorites`, `/api/watchlists`, and
+`/api/collections`, with profile isolation enforced in SQL. Endpoint
+contracts, isolation rules, and idempotent progress writes are documented
+in [docs/HOUSEHOLD_API.md](docs/HOUSEHOLD_API.md).
+
 ## Security note
 
 Media is mounted read-only. Do not expose ports 8096 or 3210 directly to the public Internet. Use a VPN such as Tailscale for remote access.

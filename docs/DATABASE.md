@@ -18,6 +18,7 @@ server-side code.
 | `src/lib/jellyfin-health.ts` | Bounded `/System/Info/Public` reachability probe for `/api/health` (no API key sent). |
 | `src/app/api/health/route.ts` | Readiness: database (fail-closed) + Jellyfin (informational). |
 | `docker-compose.dev-db.yml` | Disposable loopback PostgreSQL 18 for development/verification. |
+| `src/lib/household/` | Household persistence (RH-0027): profiles, preferences, favorites, watchlists, collections, watch/continue-watching overlay, playback history, Jellyfin links. See [HOUSEHOLD_API.md](HOUSEHOLD_API.md). |
 
 ## Environment
 
@@ -96,6 +97,22 @@ Current migrations:
 
 1. `0001_app_role_grants_baseline.sql` — grants the application role DML on
    future owner-created tables/sequences and read-only migration bookkeeping.
+2. `0002_household_profiles_and_preferences.sql` — the shared
+   `reelhouse_set_updated_at` trigger plus `household_profile` (unique
+   case-insensitive display names) and `profile_preferences` (jsonb object).
+3. `0003_media_refs_and_jellyfin_links.sql` — `media_item_ref`, the stable
+   `(source, external_id)` bridge to external media, and the 1:1
+   `jellyfin_account_link` (user ids only, never tokens).
+4. `0004_favorites.sql` — the `(profile, media)` pair as primary key.
+5. `0005_watchlists.sql` — per-profile named lists with splicable item
+   positions.
+6. `0006_collections.sql` — household-level curated collections; the creator
+   is provenance (`ON DELETE SET NULL`), never ownership.
+7. `0007_watch_state_and_playback.sql` — the ReelHouse-owned
+   continue-watching overlay (one row per profile+item, partial index
+   matching the rail query) and the append-only `playback_event` history.
+8. `0008_household_idempotency.sql` — `idempotency_record` replay-detection
+   keys for the watch-progress API.
 
 ## Readiness contract (`GET /api/health`)
 
