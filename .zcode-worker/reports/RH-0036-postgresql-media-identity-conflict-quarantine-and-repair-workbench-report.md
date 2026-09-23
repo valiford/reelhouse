@@ -188,14 +188,14 @@ audit trail.
 - Stale queue rows: `origin/main`'s queue still lists everything READY while
   branches carry REVIEW reports. This branch's queue copy moves
   RH-0033/0034/0036 to REVIEW (their branches carry review reports);
-  RH-0035 keeps its READY row here although a local worktree
-  (`reelhouse-rh-0035`, still at rh-0034's base commit) already exists —
-  per the protocol that worktree is a lease, so RH-0035 was skipped, not
-  claimed.
+  RH-0035's READY row is left here for its own worker — a lease existed all
+  along (local worktree `reelhouse-rh-0035`; during this session it matured
+  into a pushed branch `origin/rh-0035-…` with a REVIEW report), so RH-0035
+  was skipped, never claimed here.
 - Genuinely unclaimed READY in the current wave after this claim:
-  RH-0037, plus RH-0035's row if its lease is stale. Older-wave rows
-  RH-0028/0029 have no branches/worktrees; RH-0004 duplicates RH-0016 and
-  should never be claimed. The six-unclaimed-READY guideline remains
-  unmet by live rows — flagging for the maintainer.
+  RH-0037. Older-wave rows RH-0028/0029 have no branches/worktrees;
+  RH-0004 duplicates RH-0016 and should never be claimed. The
+  six-unclaimed-READY guideline remains unmet by live rows — flagging for
+  the maintainer.
 - After RH-0036: RH-0037 (backup/restore/DR acceptance) is the natural
-  next claim; RH-0035 (TV interaction) needs its lease clarified first.
+  next claim; RH-0035 is in REVIEW on its own branch.
