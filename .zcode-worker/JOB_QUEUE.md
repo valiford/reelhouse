@@ -7,7 +7,6 @@ The highest-priority READY job with satisfied dependencies and `AUTOMATION_ELIGI
 | Priority | Job ID | Status | Agent | Description |
 |---:|---|---|---|---|
 | 6 | RH-0035 | READY | ZCODE | TV remote and living-room interaction enhancement |
-| 8 | RH-0037 | READY | ZCODE | PostgreSQL backup restore catalog rebuild and disaster-recovery acceptance |
 | 1 | RH-0024 | READY | ZCODE | Real Synology PostgreSQL 18 ReelHouse connectivity and least-privilege role smoke |
 | 2 | RH-0025 | READY | ZCODE | PostgreSQL ReelHouse schema migrations and household-state constraints |
 | 3 | RH-0026 | READY | ZCODE | Jellyfin API to PostgreSQL media_catalog full synchronization |
@@ -56,6 +55,7 @@ _None._
 | 4 | RH-0033 | REVIEW | ZCODE | Household profile preferences favorites and watch-state dataload |
 | 5 | RH-0034 | REVIEW | ZCODE | Search discovery recommendation and home-row PostgreSQL read models |
 | 7 | RH-0036 | REVIEW | ZCODE | PostgreSQL media identity conflict quarantine and repair workbench |
+| 8 | RH-0037 | REVIEW | ZCODE | PostgreSQL backup restore catalog rebuild and disaster-recovery acceptance |
 
 ## Completed / Integrated
 
