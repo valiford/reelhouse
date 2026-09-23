@@ -18,6 +18,7 @@ watch state) is a separate authority and never derived from these tables.
 | `src/lib/catalog/changes.ts` | Shared change-detection core (RH-0032): content diffing against stored rows, transition planning, duplicate policy, watermark math. |
 | `src/lib/catalog/sync.ts` | Full-library reconciliation: upserts, bounded batch transactions, tombstoning, run history, change history. |
 | `src/lib/catalog/incremental.ts` | Incremental refresh (RH-0032): watermark-windowed deltas plus presence sweeps. |
+| `src/lib/catalog/workbench.ts`, `scripts/catalog-workbench.ts` | Identity-conflict repair workbench (RH-0036): conflict scans, inspection, audited release/discard/remap (`npm run catalog:workbench`). See [WORKBENCH.md](WORKBENCH.md). |
 | `src/lib/catalog/pg-executor.ts` | pg Pool/Client adapter pinning one connection per transaction. |
 | `scripts/catalog-sync.ts` | CLI: `npm run catalog:sync` (full) and `npm run catalog:sync -- --incremental`. |
 | `scripts/dev/jellyfin-stub.mjs` | Deterministic local Jellyfin double for verification and demos. |
@@ -33,7 +34,7 @@ watch state) is a separate authority and never derived from these tables.
 | `media_sync_runs` | Append-only history: when each run ran (`full` or `incremental`), what it confirmed/removed/restored/quarantined/skipped, the watermark it covered, why it failed. |
 | `media_item_changes` (RH-0032) | Append-only change history: one row per genuine state transition (`added`/`updated`/`removed`/`restored`) with the source revision (Etag, else DateLastSaved), the source-provided `observed_at`, and — for updates — a bounded, deterministically ordered `changed_fields` list. |
 | `media_sync_state` (RH-0032) | The incremental watermark per source: the newest source `DateLastSaved` a successful run has fully covered. Advances only on success and only forward (`GREATEST`). |
-| `media_item_quarantine` (RH-0032) | Conflicting source identities (one Jellyfin id reported with differing placement/content), isolated non-destructively for the repair workbench (RH-0036). At most one open quarantine per identity; re-occurrences bump `occurrences`. |
+| `media_item_quarantine` (RH-0032, extended by RH-0036) | Conflicting media identities, isolated non-destructively for the repair workbench. The sync writes `duplicate_identity` rows; the RH-0036 scan adds `duplicate_file`, `moved_media`, and `missing_external_id`. At most one open quarantine per (identity, reason); re-occurrences bump `occurrences`. Resolution and audit: [WORKBENCH.md](WORKBENCH.md). |
 
 ## Identity, provenance, freshness
 
@@ -116,6 +117,14 @@ first occurrence wins deterministically, the run still succeeds, and the
 conflict lands in `media_item_quarantine` (bounded evidence projection:
 identity, placement, revision markers) for RH-0036's repair workbench.
 Re-seeing the same conflict bumps `occurrences` on the existing row.
+
+## Identity conflict workbench (`npm run catalog:workbench`, RH-0036)
+
+The operator side of that policy: scans find the whole-catalog conflict
+classes (duplicate files, moved/renamed media, missing external IDs),
+`list`/`show` inspect every quarantined conflict with its evidence, and
+`release`/`discard`/`remap` record audited resolutions (operator identity
+required). See [WORKBENCH.md](WORKBENCH.md).
 
 ## Verification
 

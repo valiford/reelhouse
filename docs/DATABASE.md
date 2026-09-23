@@ -110,6 +110,9 @@ Current migrations:
 4. `0008_read_model_indexes.sql` — partial indexes for the client-facing
    read paths over the active catalog (title/recency/rating/year; see
    [READMODELS.md](READMODELS.md)).
+5. `0009_media_identity_workbench.sql` — the identity-conflict repair
+   workbench (extended quarantine reasons, `media_identity_scans`,
+   `media_identity_repairs`; see [WORKBENCH.md](WORKBENCH.md)).
 
 ## Readiness contract (`GET /api/health`)
 

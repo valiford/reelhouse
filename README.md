@@ -109,6 +109,28 @@ through its API. Schema, identity model, reconciliation semantics, and the
 deterministic verification workflow (including a local Jellyfin stub):
 [docs/CATALOG.md](docs/CATALOG.md).
 
+### Media identity conflict workbench
+
+Ambiguous media identities — duplicate Jellyfin mappings, duplicate files,
+moved/renamed media, missing external IDs — are quarantined non-destructively
+in `media_item_quarantine`. The operator workbench scans the active catalog
+for the whole-catalog conflict classes, inspects each conflict with its
+evidence (involved items, change history, prior repairs), and records audited
+resolutions (`release`/`discard`/`remap`) — with the operator identity and
+before/after evidence appended to an audit table, and the one catalog write
+it allows (placement remap) staying subordinate to Jellyfin's authority on
+the next sync. It never touches Jellyfin's internal database.
+
+```bash
+npm run catalog:workbench -- scan
+npm run catalog:workbench -- list
+npm run catalog:workbench -- show <id>
+REELHOUSE_OPERATOR=name npm run catalog:workbench -- release <id> --note "verified"
+```
+
+Conflict classes, resolution semantics, and the audit model:
+[docs/WORKBENCH.md](docs/WORKBENCH.md).
+
 ### Household state import
 
 Household-owned state — profiles, preferences, favorites, watchlists,
