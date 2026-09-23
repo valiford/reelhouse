@@ -137,6 +137,16 @@ is structural, and catalog churn (items removed from Jellyfin) drops out of
 rails on the next read without touching household state. Endpoints, bounds,
 and semantics: [docs/READMODELS.md](docs/READMODELS.md).
 
+The TV/living-room UI consumes exactly these read models: the home feed
+renders `/api/home` rails, search drives `/api/catalog/search`, item detail
+opens `/api/catalog/items/{id}`, and `/api/catalog/status` + `/api/health`
+drive the degraded-state banners (with the bundled demo library taking over
+only when the database is unconfigured). Remote/keyboard interaction —
+deterministic arrow-key focus order, Enter/Back behavior, visible focus,
+modal escape with focus restore, skeleton/error states, and 10-foot density
+tiers — is specified in [docs/TV_REMOTE.md](docs/TV_REMOTE.md); the focus
+engine and payload mappers are hermetically tested under `npm test`.
+
 ```bash
 npm test         # hermetic unit matrices
 npm run test:int # integration + least-privilege role smoke (disposable local PG18)
