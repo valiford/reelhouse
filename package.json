@@ -8,12 +8,13 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/lib/db/config.test.ts src/lib/db/migrator.test.ts src/lib/jellyfin-health.test.ts src/lib/catalog/normalize.test.ts src/lib/catalog/source.test.ts src/lib/catalog/incremental.test.ts src/lib/catalog/workbench.test.ts src/lib/household/manifest.test.ts src/lib/readmodels/params.test.ts src/lib/readmodels/query.test.ts",
-    "test:int": "node --test src/lib/db/integration.int.test.ts src/lib/catalog/sync.int.test.ts src/lib/catalog/incremental.int.test.ts src/lib/catalog/workbench.int.test.ts src/lib/household/load.int.test.ts src/lib/readmodels/search.int.test.ts src/lib/readmodels/home.int.test.ts",
+    "test": "node --test src/lib/db/config.test.ts src/lib/db/migrator.test.ts src/lib/jellyfin-health.test.ts src/lib/catalog/normalize.test.ts src/lib/catalog/source.test.ts src/lib/catalog/incremental.test.ts src/lib/catalog/workbench.test.ts src/lib/household/manifest.test.ts src/lib/dr/artifact.test.ts src/lib/dr/status.test.ts src/lib/readmodels/params.test.ts src/lib/readmodels/query.test.ts",
+    "test:int": "node --test src/lib/db/integration.int.test.ts src/lib/catalog/sync.int.test.ts src/lib/catalog/incremental.int.test.ts src/lib/catalog/workbench.int.test.ts src/lib/household/load.int.test.ts src/lib/dr/dr.int.test.ts src/lib/readmodels/search.int.test.ts src/lib/readmodels/home.int.test.ts",
     "db:migrate": "node scripts/db-migrate.ts",
     "catalog:sync": "node scripts/catalog-sync.ts",
     "catalog:workbench": "node scripts/catalog-workbench.ts",
-    "household:import": "node scripts/household-import.ts"
+    "household:import": "node scripts/household-import.ts",
+    "dr": "node scripts/dr.ts"
   },
   "dependencies": {
     "next": "16.0.1",

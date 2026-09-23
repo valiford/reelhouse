@@ -113,6 +113,9 @@ Current migrations:
 5. `0009_media_identity_workbench.sql` — the identity-conflict repair
    workbench (extended quarantine reasons, `media_identity_scans`,
    `media_identity_repairs`; see [WORKBENCH.md](WORKBENCH.md)).
+6. `0010_disaster_recovery_ledgers.sql` — the DR run ledgers
+   (`dr_backup_runs`, `dr_restore_runs`, `dr_rebuild_runs`; see
+   [DISASTER_RECOVERY.md](DISASTER_RECOVERY.md)).
 
 ## Readiness contract (`GET /api/health`)
 

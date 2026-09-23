@@ -22,6 +22,8 @@ venv/
 data/
 cache/
 tmp/
+# Disaster-recovery artifacts (npm run dr -- backup) are operator-local.
+var/
 # Jellyfin engine runtime state (mounted as /config and /cache by docker-compose).
 # Jellyfin-owned authority: internal database, metadata, logs, transcode temp.
 jellyfin-config/

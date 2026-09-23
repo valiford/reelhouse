@@ -146,6 +146,21 @@ profile. Item links resolve against the media catalog automatically as the
 catalog catches up. Schema, identity model, manifest contract, and
 verification: [docs/HOUSEHOLD.md](docs/HOUSEHOLD.md).
 
+### Disaster recovery (backup, restore, rebuild)
+
+Household state is ReelHouse's only durable data; the media catalog is a
+rebuildable mirror of Jellyfin. Recovery follows that split:
+`npm run dr -- backup` captures the household to a checksummed artifact,
+`npm run dr -- restore` verifies it against a recorded checksum or the
+backup ledger and replays it through the real idempotent import
+(`--dry-run` verifies by replaying and rolling back), and
+`npm run dr -- rebuild` recovers the catalog with a verified full resync
+from Jellyfin — media is never deleted, and Jellyfin's internal database is
+never touched. `npm run dr -- status` flags stale catalog/household data,
+stale or missing backups, and unrehearsed recovery paths with actionable
+verdicts, plus RTO/RPO notes. The runbook:
+[docs/DISASTER_RECOVERY.md](docs/DISASTER_RECOVERY.md).
+
 ### PostgreSQL read models (search, home rails, freshness)
 
 Once catalog and household state are loaded, clients are served from
