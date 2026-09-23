@@ -124,6 +124,19 @@ profile. Item links resolve against the media catalog automatically as the
 catalog catches up. Schema, identity model, manifest contract, and
 verification: [docs/HOUSEHOLD.md](docs/HOUSEHOLD.md).
 
+### PostgreSQL read models (search, home rails, freshness)
+
+Once catalog and household state are loaded, clients are served from
+bounded, indexed read models: `/api/catalog/search` (filter/paginate the
+active catalog), `/api/catalog/items/{id}` (detail with facets),
+`/api/catalog/status` (catalog freshness and degraded-state surface), and
+`/api/home` (a profile's home rows resolved into item rails — continue
+watching, recently added, favorites, libraries, collections, watchlists).
+Every result set is capped, every order is deterministic, profile isolation
+is structural, and catalog churn (items removed from Jellyfin) drops out of
+rails on the next read without touching household state. Endpoints, bounds,
+and semantics: [docs/READMODELS.md](docs/READMODELS.md).
+
 ```bash
 npm test         # hermetic unit matrices
 npm run test:int # integration + least-privilege role smoke (disposable local PG18)

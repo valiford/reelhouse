@@ -20,6 +20,7 @@ nothing is written to disk, bundled, or echoed.
 | `src/app/api/health/route.ts` | Readiness: database (fail-closed) + migration summary + Jellyfin (informational). |
 | `docker-compose.dev-db.yml` | Disposable loopback PostgreSQL 18 for development/verification. |
 | `src/lib/catalog/`, `scripts/catalog-sync.ts` | Media catalog schema/sync built on this layer (`npm run catalog:sync`). See [CATALOG.md](CATALOG.md). |
+| `src/lib/readmodels/`, `src/app/api/catalog/`, `src/app/api/home` | Bounded read models over catalog + household state (search, home rails, freshness, recommendation inputs). See [READMODELS.md](READMODELS.md). |
 
 ## Environment
 
@@ -106,6 +107,9 @@ Current migrations:
    (`household_*`; profiles, preferences, Jellyfin links, favorites,
    watchlists, collections, home rows, watch state, playback history,
    import runs; see [HOUSEHOLD.md](HOUSEHOLD.md)).
+4. `0008_read_model_indexes.sql` — partial indexes for the client-facing
+   read paths over the active catalog (title/recency/rating/year; see
+   [READMODELS.md](READMODELS.md)).
 
 ## Readiness contract (`GET /api/health`)
 
