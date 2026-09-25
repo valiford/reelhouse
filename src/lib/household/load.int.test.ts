@@ -8,7 +8,7 @@
 //   REELHOUSE_TEST_MIGRATE_URL   owner/migrator role
 //   REELHOUSE_TEST_DATABASE_URL  application role
 //
-// Scenarios: migration 0007 creates the household family under the same
+// Scenarios: migration 0006 creates the household family under the same
 // least-privilege rules (plus its schema invariants), the first import with
 // catalog-resolved item links under the app role, byte-identical idempotent
 // re-import (zero writes, zero appended history), snapshot evolution
@@ -285,7 +285,7 @@ async function lastRun(pool: Pool): Promise<Record<string, unknown>> {
   return result.rows[0];
 }
 
-test("migration 0007 creates the household family and enforces its invariants", async (t) => {
+test("migration 0006 creates the household family and enforces its invariants", async (t) => {
   await withFreshHousehold(t, async (db) => {
     await withClient(db.app, async (client) => {
       const expected = [

@@ -27,7 +27,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { Client, Pool } from "pg";
 import { loadDatabaseConfig, type DatabaseConfig } from "../db/config.ts";
-import { runMigrations } from "../db/migrator.ts";
+import { loadMigrationFiles, runMigrations } from "../db/migrator.ts";
 import { createPgSyncExecutor } from "./pg-executor.ts";
 import { CatalogSyncError, runFullCatalogSync } from "./sync.ts";
 import type { CatalogLibrary, CatalogRawItem, CatalogSource, CatalogItemsPage } from "./source.ts";
@@ -222,7 +222,11 @@ async function withFreshCatalog(
 
   try {
     const applied = await runMigrations(migrateTemp, MIGRATIONS_DIR, appTemp.user);
-    assert.equal(applied.appliedNow.length, 5, "all five migrations apply to a fresh database");
+    assert.deepEqual(
+      applied.appliedNow,
+      loadMigrationFiles(MIGRATIONS_DIR).map((file) => file.version),
+      "all on-disk migrations apply to a fresh database (catalog + household)"
+    );
     await fn({ migrate: migrateTemp, app: appTemp, appPool });
   } finally {
     await appPool.end();
@@ -326,7 +330,7 @@ test("catalog migrations apply idempotently and create the media_catalog tables"
       );
       assert.deepEqual(
         applied.rows.map((row) => row.version),
-        [1, 2, 3, 4, 5]
+        loadMigrationFiles(MIGRATIONS_DIR).map((file) => file.version)
       );
       const expected = [
         "media_libraries",
