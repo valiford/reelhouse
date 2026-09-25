@@ -106,6 +106,11 @@ Current migrations:
    (`household_*`; profiles, preferences, Jellyfin links, favorites,
    watchlists, collections, home rows, watch state, playback history,
    import runs; see [HOUSEHOLD.md](HOUSEHOLD.md)).
+4. `0007_catalog_change_history_and_quarantine.sql` — the incremental
+   catalog family: append-only `media_item_changes` history with source
+   revisions, the advance-only `media_sync_state` watermark, duplicate
+   `media_item_quarantine`, and the `incremental` run mode (see
+   [CATALOG.md](CATALOG.md)).
 
 ## Readiness contract (`GET /api/health`)
 

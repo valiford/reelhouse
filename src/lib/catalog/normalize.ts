@@ -63,6 +63,10 @@ export interface NormalizedItem {
   backdropImageTag: string | null;
   etag: string | null;
   dateCreated: string | null;
+  // Source-provided revision marker (Jellyfin DateLastSaved): when the
+  // source last saved this item. Drives the incremental delta window and the
+  // observed_at provenance of change history; null when the source omits it.
+  dateLastSaved: string | null;
   parentJellyfinId: string | null;
   seriesJellyfinId: string | null;
   seriesName: string | null;
@@ -242,6 +246,7 @@ export function normalizeItem(
     backdropImageTag: asString(backdropTags[0], 100),
     etag: asString(payload.Etag, 100),
     dateCreated: asIsoTimestamp(payload.DateCreated),
+    dateLastSaved: asIsoTimestamp(payload.DateLastSaved),
     parentJellyfinId: asString(payload.ParentId),
     seriesJellyfinId: asString(payload.SeriesId),
     seriesName: asString(payload.SeriesName),

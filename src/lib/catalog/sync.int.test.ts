@@ -96,6 +96,31 @@ class FakeCatalogSource implements CatalogSource {
     const items = this.itemsByLibrary.get(libraryJellyfinId) ?? [];
     return { items: items.slice(startIndex, startIndex + limit), totalRecordCount: items.length };
   }
+
+  // The RH-0031 fixtures carry no DateLastSaved, so the delta window of a
+  // seeded baseline never selects them — the full-sync scenarios stay
+  // exactly as scoped.
+  async fetchChangedItemsPage(
+    libraryJellyfinId: string,
+    sinceIso: string,
+    startIndex: number,
+    limit: number
+  ): Promise<CatalogItemsPage> {
+    const threshold = new Date(sinceIso);
+    const items = (this.itemsByLibrary.get(libraryJellyfinId) ?? []).filter(
+      (entry) => typeof entry.DateLastSaved === "string" && new Date(entry.DateLastSaved) >= threshold
+    );
+    return { items: items.slice(startIndex, startIndex + limit), totalRecordCount: items.length };
+  }
+
+  async fetchLibraryItemIdsPage(
+    libraryJellyfinId: string,
+    startIndex: number,
+    limit: number
+  ): Promise<CatalogItemsPage> {
+    const items = (this.itemsByLibrary.get(libraryJellyfinId) ?? []).map((entry) => ({ Id: entry.Id }));
+    return { items: items.slice(startIndex, startIndex + limit), totalRecordCount: items.length };
+  }
 }
 
 function library(jellyfinId: string, name: string, collectionType: string | null): CatalogLibrary {
@@ -225,7 +250,7 @@ async function withFreshCatalog(
     assert.deepEqual(
       applied.appliedNow,
       loadMigrationFiles(MIGRATIONS_DIR).map((file) => file.version),
-      "all on-disk migrations apply to a fresh database (catalog + household)"
+      "all on-disk migrations apply to a fresh database (catalog + household + incremental)"
     );
     await fn({ migrate: migrateTemp, app: appTemp, appPool });
   } finally {

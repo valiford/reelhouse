@@ -100,6 +100,10 @@ The media catalog (the `media_*` tables) is a normalized, provenance-
 preserving mirror of the Jellyfin library, loaded server-side with
 `npm run catalog:sync` — libraries, movies, series, seasons, episodes,
 people, genres, studios, file state, external IDs, and per-run sync history.
+`npm run catalog:sync -- --incremental` refreshes only what changed since
+the last successful run (watermark-windowed deltas plus presence sweeps),
+recording an append-only change history (added/updated/removed/restored)
+and quarantining conflicting duplicate identities without touching them.
 Jellyfin stays the playback/library authority and is only ever reached
 through its API. Schema, identity model, reconciliation semantics, and the
 deterministic verification workflow (including a local Jellyfin stub):

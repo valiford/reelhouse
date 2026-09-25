@@ -98,6 +98,47 @@ test("fetchItemsPage sends the full bounded query contract", async () => {
   assert.deepEqual(page, { items: [], totalRecordCount: 0 });
 });
 
+test("fetchChangedItemsPage sends the per-library delta window contract", async () => {
+  const { fetchImpl, requests } = fakeFetch(() =>
+    jsonResponse({ Items: [{ Id: "mov-1", Name: "X", Type: "Movie", DateLastSaved: "2025-06-01T12:00:00.000Z" }], TotalRecordCount: 1 })
+  );
+  const source = new JellyfinCatalogSource("http://jf.local:8096", KEY, fetchImpl);
+
+  const page = await source.fetchChangedItemsPage("lib-9", "2025-06-01T11:59:59.000Z", 100, 250);
+
+  assert.equal(requests.length, 1);
+  const params = new URL(requests[0].url).searchParams;
+  assert.equal(params.get("ParentId"), "lib-9", "the delta is scoped per library");
+  assert.equal(params.get("MinDateLastSaved"), "2025-06-01T11:59:59.000Z");
+  assert.equal(params.get("Recursive"), "true");
+  assert.equal(params.get("IncludeItemTypes"), "Movie,Series,Season,Episode,Video");
+  assert.equal(params.get("SortBy"), "SortName");
+  assert.equal(params.get("StartIndex"), "100");
+  assert.equal(params.get("Limit"), "250");
+  assert.ok(!requests[0].url.includes(KEY));
+  const fields = (params.get("Fields") ?? "").split(",");
+  assert.ok(fields.includes("DateLastSaved"), "delta payloads must carry the save time");
+  assert.equal(page.items.length, 1);
+  assert.equal(page.totalRecordCount, 1);
+});
+
+test("fetchLibraryItemIdsPage requests identity-only sweep pages", async () => {
+  const { fetchImpl, requests } = fakeFetch(() =>
+    jsonResponse({ Items: [{ Id: "mov-1" }, { Id: "mov-2" }], TotalRecordCount: 2 })
+  );
+  const source = new JellyfinCatalogSource("http://jf.local:8096", KEY, fetchImpl);
+
+  const page = await source.fetchLibraryItemIdsPage("lib-9", 0, 500);
+
+  assert.equal(requests.length, 1);
+  const params = new URL(requests[0].url).searchParams;
+  assert.equal(params.get("ParentId"), "lib-9");
+  assert.equal(params.get("Fields"), "Id", "the sweep must not pull full payloads");
+  assert.equal(params.get("StartIndex"), "0");
+  assert.equal(params.get("Limit"), "500");
+  assert.deepEqual(page.items, [{ Id: "mov-1" }, { Id: "mov-2" }]);
+});
+
 test("non-OK API responses raise status errors that never echo the key", async () => {
   for (const status of [401, 403, 500]) {
     const { fetchImpl } = fakeFetch(
