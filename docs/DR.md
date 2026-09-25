@@ -51,6 +51,16 @@ double as measured RTO inputs. Connection details travel via `PG*`
 environment variables only — never argv — so nothing credential-bearing can
 leak into process listings or logs.
 
+When the PostgreSQL client tools are not on the host's `PATH` (e.g. the
+server runs in a container), override the two tool commands; the database
+name is appended as the final argument and the dump is piped through
+stdout/stdin:
+
+```bash
+export DR_PG_DUMP_CMD="docker exec reelhouse-postgres pg_dump -U reelhouse_owner --no-owner --no-privileges --schema=public"
+export DR_PSQL_CMD="docker exec -i reelhouse-postgres psql -U reelhouse_owner --set ON_ERROR_STOP=1 --quiet"
+```
+
 Run it: after setting up backups (once), after any migration lands, and as
 part of the quarterly DR drill.
 

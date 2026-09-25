@@ -38,9 +38,6 @@
 //     place for inspection; dropping it is the operator's call.
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { Client } from "pg";
 import { loadDatabaseConfig, redactDatabaseUrl, type DatabaseConfig } from "../src/lib/db/config.ts";
 
@@ -113,6 +110,18 @@ function pgEnv(config: DatabaseConfig): NodeJS.ProcessEnv {
   };
 }
 
+// The dump/restore tool commands are overridable for environments where the
+// client lives elsewhere (e.g. inside the server's container). Auth still
+// travels via PG* environment variables by default; an override that routes
+// through a container or wrapper must carry its own auth (e.g. -U) — the
+// database name is appended as the final argument either way. The dump is
+// piped through stdout/stdin, so no file paths cross the tool boundary.
+const DUMP_CMD = process.env.DR_PG_DUMP_CMD?.trim() || "pg_dump --no-owner --no-privileges --schema=public";
+const RESTORE_CMD = process.env.DR_PSQL_CMD?.trim() || "psql --set ON_ERROR_STOP=1 --quiet";
+// The dump buffer is bounded: dr:verify is an acceptance tool for the
+// ReelHouse database (household-scale), not a generic backup engine.
+const MAX_DUMP_BYTES = 256 * 1024 * 1024;
+
 async function withClient<T>(
   config: DatabaseConfig,
   fn: (client: Client) => Promise<T>
@@ -143,13 +152,20 @@ async function publicTables(config: DatabaseConfig): Promise<string[]> {
   });
 }
 
-async function assertScratchEmpty(): Promise<void> {
+async function prepareScratch(): Promise<void> {
   const tables = await publicTables(scratch);
   if (tables.length > 0) {
     fail(
       `scratch database is not empty (public tables: ${tables.slice(0, 5).join(", ")}${tables.length > 5 ? ", …" : ""}) — refusing to restore into it`
     );
   }
+  // pg_dump's plain output opens with CREATE SCHEMA public (PG15+ emits it
+  // unconditionally), so the schema must be ABSENT at restore time. Dropping
+  // it also clears any non-table leftovers (views, sequences, functions) the
+  // table check could not see — the dump alone defines what the scratch gets.
+  await withClient(scratch, async (client) => {
+    await client.query("DROP SCHEMA IF EXISTS public CASCADE");
+  });
 }
 
 interface TableProjection {
@@ -176,38 +192,40 @@ async function projectTables(config: DatabaseConfig, tables: readonly string[]):
   });
 }
 
-function runTool(name: string, args: string[], env: NodeJS.ProcessEnv): void {
-  const result = spawnSync(name, args, { env, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+function runTool(name: string, command: string, database: string, env: NodeJS.ProcessEnv, input?: string): string {
+  // The database name comes from the operator's own DATABASE_*_URL env, the
+  // same trust domain as the tool command itself; the command string is the
+  // documented override surface (see DR_PG_DUMP_CMD in docs/DR.md).
+  const result = spawnSync(`${command} ${database}`, {
+    env,
+    encoding: "utf8",
+    maxBuffer: MAX_DUMP_BYTES,
+    input,
+    shell: true
+  });
   if (result.error) fail(`could not run ${name}: ${scrub(result.error.message)}`);
   if (result.status !== 0) {
     const detail = (result.stderr || result.stdout || "").trim().slice(0, 500);
     fail(`${name} exited with status ${result.status}: ${scrub(detail)}`);
   }
+  return result.stdout ?? "";
 }
 
 console.log("dr:verify — ReelHouse backup/restore acceptance");
 console.log(`source:  ${redactDatabaseUrl(process.env.DATABASE_MIGRATE_URL ?? "")}`);
 console.log(`scratch: ${redactDatabaseUrl(process.env.DATABASE_RESTORE_URL ?? "")}`);
 
-await assertScratchEmpty();
+await prepareScratch();
 
-const dumpPath = join(mkdtempSync(join(tmpdir(), "reelhouse-dr-")), "reelhouse-dump.sql");
 const dumpStarted = Date.now();
-runTool(
-  "pg_dump",
-  ["--format=plain", "--no-owner", "--no-privileges", "--schema=public", "--file", dumpPath, "--dbname", source.database],
-  pgEnv(source)
-);
+const dumpSql = runTool("pg_dump", DUMP_CMD, source.database, pgEnv(source));
 const dumpSeconds = (Date.now() - dumpStarted) / 1000;
-const dumpBytes = statSync(dumpPath).size;
+const dumpBytes = Buffer.byteLength(dumpSql, "utf8");
 console.log(`pg_dump completed in ${dumpSeconds.toFixed(1)}s (${(dumpBytes / 1024 / 1024).toFixed(2)} MiB)`);
+if (!dumpSql.trim()) fail("pg_dump produced no output — refusing to verify an empty dump");
 
 const restoreStarted = Date.now();
-runTool(
-  "psql",
-  ["--dbname", scratch.database, "--set", "ON_ERROR_STOP=1", "--quiet", "--file", dumpPath],
-  pgEnv(scratch)
-);
+runTool("psql", RESTORE_CMD, scratch.database, pgEnv(scratch), dumpSql);
 const restoreSeconds = (Date.now() - restoreStarted) / 1000;
 console.log(`psql restore completed in ${restoreSeconds.toFixed(1)}s`);
 
@@ -239,15 +257,6 @@ for (const table of VERIFIED_TABLES) {
     );
     mismatches += 1;
   }
-}
-
-try {
-  rmSync(dumpPath, { force: true });
-  rmSync(join(dumpPath, ".."), { recursive: true, force: true });
-} catch {
-  // A temp file that refuses to die is a cleanup note, not a verification
-  // failure.
-  console.log(`note: could not remove temporary dump ${dumpPath}`);
 }
 
 if (mismatches > 0) {
