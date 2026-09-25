@@ -125,3 +125,15 @@ npm run household:import -- scripts/dev/household-sample.json   # re-import: zer
 ```
 
 Every echoed error is scrubbed of the database URL.
+
+## Serving household state (RH-0040)
+
+Household state is read back through the bounded PostgreSQL read models:
+`GET /api/library` renders the profile's configured home rows
+(continue-watching with ReelHouse watch progress, recently added,
+favorites, library/collection/watchlist rails), scoped strictly to the
+selected profile (`?profile=slug`, default profile when absent). Entries
+whose catalog link is not resolved yet are skipped in the payload — the
+household rows themselves are never touched by reads. See
+[CATALOG.md](CATALOG.md) "Read models" and [DR.md](DR.md) for the
+durable-vs-rebuildable split behind backup policy.

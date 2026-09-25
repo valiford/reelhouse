@@ -170,3 +170,17 @@ npm run catalog:sync -- --incremental                   # failed run, watermark 
 mid-run failure path (failed run recorded, earlier page committed), and a
 subsequent run with `FAULT_MODE=none` demonstrates recovery. Every echoed
 error is scrubbed of the server URL and API key.
+
+## Read models (RH-0040)
+
+Once the catalog holds synced rows, the client-facing reads come from
+PostgreSQL, not from live Jellyfin calls: `GET /api/library` serves the
+household home rails and `GET /api/search?q=` serves bounded search
+(`source: "catalog"` in the payload). Rails are the configured
+`household_home_rows` (or the built-in defaults), every read is a bounded
+indexed query over active rows, household references whose catalog link is
+missing are skipped until the catalog catches up, and an unsynced catalog
+falls back to the legacy Jellyfin/demo path. `/api/health` carries a
+`catalog` freshness block (counts, last sync, watermark, quarantine,
+last household import). Deterministic evidence: the read-model suites in
+`src/lib/readmodels/` (hermetic + disposable-PG integration).

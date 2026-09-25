@@ -17,7 +17,9 @@ nothing is written to disk, bundled, or echoed.
 | `db/migrations/NNNN_name.sql` | Ordered, forward-only, idempotent migrations. `{{app_role}}` is the only supported placeholder. |
 | `scripts/db-migrate.ts` | CLI: `npm run db:migrate` (owner role). Redacted, fail-closed output. |
 | `src/lib/jellyfin-health.ts` | Bounded `/System/Info/Public` reachability probe for `/api/health` (no API key sent). |
-| `src/app/api/health/route.ts` | Readiness: database (fail-closed) + migration summary + Jellyfin (informational). |
+| `src/app/api/health/route.ts` | Readiness: database (fail-closed) + migration summary + catalog/household freshness + Jellyfin (informational). |
+| `src/lib/readmodels/` | RH-0040 bounded read models: home rails, search, diagnostics, served by `/api/library` + `/api/search` when the catalog is synced; `pg.ts` is the server-only pool bridge. |
+| `scripts/dr-verify.ts` | RH-0040 backup/restore acceptance: pg_dump → scratch restore → per-table count+digest verification. See [DR.md](DR.md). |
 | `docker-compose.dev-db.yml` | Disposable loopback PostgreSQL 18 for development/verification. |
 | `src/lib/catalog/`, `scripts/catalog-sync.ts` | Media catalog schema/sync built on this layer (`npm run catalog:sync`). See [CATALOG.md](CATALOG.md). |
 
@@ -111,6 +113,10 @@ Current migrations:
    revisions, the advance-only `media_sync_state` watermark, duplicate
    `media_item_quarantine`, and the `incremental` run mode (see
    [CATALOG.md](CATALOG.md)).
+5. `0008_read_model_indexes.sql` — bounded-read indexes for the RH-0040
+   read models: a partial recent-items index (active rows, `date_created
+   DESC NULLS LAST`) and a case-folded name index for deterministic search
+   ordering. Indexes only — no rows are touched.
 
 ## Readiness contract (`GET /api/health`)
 
@@ -124,7 +130,12 @@ Current migrations:
 `migrations` is reported alongside whenever the database is reachable
 (`ok` with applied/pending/lastVersion, or `unknown` with a bounded detail,
 e.g. migrations not shipped with a standalone bundle). It is diagnostic and
-never flips the overall status. `jellyfin` is reported alongside too
+never flips the overall status. `catalog` is reported alongside too (RH-0040):
+when the database is reachable it carries freshness data — active
+item/library counts, quarantine occupancy, last successful sync (time + mode),
+the incremental watermark, active profile count, and last successful
+household import — and degrades to `unknown` with a bounded detail instead
+of ever failing the request. `jellyfin` is reported alongside as well
 (`unconfigured` / `reachable` with name+version+latency / `unreachable`
 with a redacted detail) and never flips the overall status either: an
 unreachable Jellyfin degrades the library source to demo mode, it does not

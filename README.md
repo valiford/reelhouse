@@ -129,6 +129,18 @@ npm test         # hermetic unit matrices
 npm run test:int # integration + least-privilege role smoke (disposable local PG18)
 ```
 
+### Read models & disaster recovery
+
+With `DATABASE_URL` set and a synced catalog, the home screen and search
+are served from indexed PostgreSQL read models (`source: "catalog"`)
+instead of live Jellyfin calls — per-profile rails, bounded search, and a
+catalog freshness block on `/api/health`. Jellyfin stays the playback
+authority; an unreachable Jellyfin no longer degrades the home screen when
+the catalog is synced. Backup/restore acceptance (`npm run dr:verify`)
+round-trips a pg_dump into a scratch database and verifies every table by
+count and digest; the durable-vs-rebuildable split, RTO/RPO notes, and
+recovery runbook: [docs/DR.md](docs/DR.md).
+
 ## Security note
 
 Media is mounted read-only. Do not expose ports 8096 or 3210 directly to the public Internet. Use a VPN such as Tailscale for remote access.

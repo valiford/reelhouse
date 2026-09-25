@@ -15,7 +15,9 @@ export type MediaItem = {
 };
 
 export type LibraryPayload = {
-  source: "demo" | "jellyfin";
+  // "catalog" = served from the PostgreSQL read models; "jellyfin" = the
+  // legacy direct-Jellyfin path; "demo" = the built-in demo library.
+  source: "demo" | "jellyfin" | "catalog";
   hero: MediaItem;
   sections: Array<{ title: string; items: MediaItem[] }>;
 };
