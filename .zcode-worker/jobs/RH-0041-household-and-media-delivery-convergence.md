@@ -1,6 +1,6 @@
 # RH-0041 — Household and media delivery convergence
 
-STATUS: READY
+STATUS: REVIEW
 AGENT: ZCODE
 AUTOMATION_ELIGIBLE: true
 BASE: origin/main
