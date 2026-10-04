@@ -9,6 +9,12 @@ export type MediaItem = {
   kind: MediaKind;
   rating?: number;
   progress?: number;
+  /**
+   * Read-only watch state from Jellyfin UserData.Played: true = played,
+   * false = confirmed unplayed, undefined = unknown. Never derived from
+   * playback progress alone.
+   */
+  watched?: boolean;
   imageUrl?: string;
   backdropUrl?: string;
   genres?: string[];

@@ -1,12 +1,12 @@
 import type { LibraryPayload, MediaItem } from "./types";
-import { demoLibrary } from "./demo";
+import { demoLibrary } from "./demo.ts";
 
 const serverUrl = process.env.JELLYFIN_URL?.replace(/\/$/, "");
 const apiKey = process.env.JELLYFIN_API_KEY;
 const userId = process.env.JELLYFIN_USER_ID;
 const publicUrl = process.env.NEXT_PUBLIC_JELLYFIN_URL?.replace(/\/$/, "") || serverUrl;
 
-type JellyfinItem = {
+export type JellyfinItem = {
   Id: string;
   Name: string;
   Type: "Movie" | "Series" | "Episode" | "Video";
@@ -14,7 +14,7 @@ type JellyfinItem = {
   Overview?: string;
   CommunityRating?: number;
   Genres?: string[];
-  UserData?: { PlaybackPositionTicks?: number; PlayedPercentage?: number };
+  UserData?: { PlaybackPositionTicks?: number; PlayedPercentage?: number; Played?: boolean };
   ImageTags?: { Primary?: string };
   BackdropImageTags?: string[];
 };
@@ -27,7 +27,7 @@ function image(id: string, type: "Primary" | "Backdrop", tag?: string) {
   return `${publicUrl}/Items/${id}/Images/${type}?maxWidth=${width}&quality=90&tag=${encodeURIComponent(tag)}`;
 }
 
-function mapItem(row: JellyfinItem): MediaItem {
+export function mapItem(row: JellyfinItem): MediaItem {
   return {
     id: row.Id,
     title: row.Name,
@@ -37,6 +37,7 @@ function mapItem(row: JellyfinItem): MediaItem {
     rating: row.CommunityRating,
     genres: row.Genres,
     progress: row.UserData?.PlayedPercentage,
+    watched: typeof row.UserData?.Played === "boolean" ? row.UserData.Played : undefined,
     imageUrl: image(row.Id, "Primary", row.ImageTags?.Primary),
     backdropUrl: image(row.Id, "Backdrop", row.BackdropImageTags?.[0])
   };
