@@ -1,6 +1,6 @@
 # RH-0042 — Unwatched-content spoiler shield
 
-STATUS: READY
+STATUS: REVIEW
 AGENT: ZCODE
 AUTOMATION_ELIGIBLE: true
 BASE: origin/main
