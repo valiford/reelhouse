@@ -2,7 +2,68 @@
 
 The highest-priority READY job with satisfied dependencies and `AUTOMATION_ELIGIBLE: true` may be claimed. `origin/main` is authoritative.
 
-## Ready Queue
+
+## Owner Execution Wave — 2026-10-04 reload
+
+> **Authoritative selection table.** This owner-authorized restock supersedes every earlier execution/READY table below. Claim only READY jobs in this table, with full-spec dependencies satisfied and no local/remote branch/worktree lease. Historical tables never provide fallback authorization.
+>
+> Audited origin/main: `b934fc7f77f3022d16c16d1c1a7f92253fa3019f`. This remote audit observed GitHub branches and PRs; local worktrees/processes and live deployment state were not observed. Recheck ownership at claim time. After three additional jobs reach REVIEW, refresh main and review delivery evidence before proceeding. Numeric reserve is conditional on useful independent work; do not create duplicates or bypass dependency gates.
+>
+> Full worker prompt: [worker-2026-10-04.md](prompts/worker-2026-10-04.md) · Reload evidence: [reload-2026-10-04.md](reports/reload-2026-10-04.md).
+
+| Priority | Job ID | Status | Agent | Description |
+|---:|---|---|---|---|
+| 1 | RH-0041 | READY | ZCODE | Household and media delivery convergence |
+| 2 | RH-0042 | READY | ZCODE | Unwatched-content spoiler shield |
+| 3 | RH-0043 | PROPOSED | ZCODE | Household profile switch and cached-state isolation — waits for RH-0041 accepted onto origin/main |
+| 10 | RH-0025 | READY | ZCODE | Existing approved scope; inspect full spec and local leases before claim |
+| 11 | RH-0028 | READY | ZCODE | Existing approved scope; inspect full spec and local leases before claim |
+| 12 | RH-0029 | READY | ZCODE | Existing approved scope; inspect full spec and local leases before claim |
+| 13 | RH-0004 | READY | ZCODE | Existing approved scope; inspect full spec and local leases before claim |
+
+### Existing delivery ledger — remote reconciliation
+
+| Job ID | Prior state | Observed state | Evidence |
+|---|---|---|---|
+| RH-0038 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0039 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0040 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0030 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0031 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0032 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0033 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0034 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0035 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0036 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0037 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0024 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0026 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0027 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0022 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0023 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0015 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0016 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0017 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0018 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0019 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0020 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0021 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0008 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0009 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0010 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0011 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0012 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0013 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0014 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0002 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0003 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0005 | WAITING | WAITING | prior authoritative status; local ownership unobserved |
+| RH-0006 | WAITING | WAITING | prior authoritative status; local ownership unobserved |
+| RH-0007 | WAITING | WAITING | prior authoritative status; local ownership unobserved |
+| RH-0001 | COMPLETE | COMPLETE | merged #1 |
+
+
+## Historical Ready Queue
 
 | Priority | Job ID | Status | Agent | Description |
 |---:|---|---|---|---|
