@@ -115,3 +115,14 @@ under the least-privilege application role.
 
 Read models never write. The write paths (catalog sync, household import)
 keep their own docs: [CATALOG.md](CATALOG.md), [HOUSEHOLD.md](HOUSEHOLD.md).
+
+## Consumer
+
+Since RH-0035 the TV/living-room UI is built directly on this surface:
+`/api/home` renders the profile's rails, `/api/catalog/search` drives search
+and the Movies/Shows presets, `/api/catalog/items/{id}` fills the detail
+modal, and `/api/catalog/status` + `/api/health` compose the degraded-state
+banners. The demo routes (`/api/library`, `/api/search`) remain the UI's
+fallback only when `/api/health` reports the database unconfigured. The
+interaction contract (focus order, keys, states) is specified in
+[TV_REMOTE.md](TV_REMOTE.md).
