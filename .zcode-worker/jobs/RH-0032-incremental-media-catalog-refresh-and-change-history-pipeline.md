@@ -1,6 +1,6 @@
 # RH-0032 — Incremental media_catalog refresh and change-history pipeline
 
-**STATUS:** READY
+**STATUS:** REVIEW
 **AGENT:** ZCODE
 **AUTOMATION_ELIGIBLE:** true
 **WAVE:** 2026-09-22 today priority
