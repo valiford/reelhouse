@@ -39,7 +39,7 @@ import {
   HouseholdProfileNotFoundError,
   homeFeed,
   resolveProfile
-} from "./home.ts";
+} from "./home-feed.ts";
 import { recommendationInputs } from "./recommendations.ts";
 
 const MIGRATIONS_DIR = fileURLToPath(new URL("../../../db/migrations", import.meta.url));

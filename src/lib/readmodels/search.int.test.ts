@@ -35,7 +35,7 @@ import { runFullCatalogSync } from "../catalog/sync.ts";
 import type { CatalogItemsPage, CatalogLibrary, CatalogRawItem, CatalogSource } from "../catalog/source.ts";
 import { createPgReadExecutor, type ReadExecutor } from "./executor.ts";
 import { resolvePage, resolveSearchFilters } from "./params.ts";
-import { CatalogItemNotFoundError, getCatalogItem, searchCatalogItems } from "./search.ts";
+import { CatalogItemNotFoundError, getCatalogItem, searchCatalogItems } from "./browse.ts";
 import { catalogStatus } from "./freshness.ts";
 
 const MIGRATIONS_DIR = fileURLToPath(new URL("../../../db/migrations", import.meta.url));

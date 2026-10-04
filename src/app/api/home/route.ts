@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { readModelResponse, searchParamsToObject } from "@/lib/readmodels/api";
-import { HouseholdEmptyError, homeFeed } from "@/lib/readmodels/home";
+import { HouseholdEmptyError, homeFeed } from "@/lib/readmodels/home-feed";
 
 // The profile-scoped home feed: the profile's configured home rows resolved
 // into bounded item rails. ?profile=<slug> selects a profile; without it the

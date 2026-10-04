@@ -13,8 +13,8 @@ import { redactError } from "@/lib/db/config";
 import { getPool } from "@/lib/db/pool";
 import { createPgReadExecutor, type ReadExecutor } from "./executor";
 import { ReadModelParamError } from "./params";
-import { CatalogItemNotFoundError } from "./search";
-import { HouseholdProfileNotFoundError } from "./home";
+import { CatalogItemNotFoundError } from "./browse";
+import { HouseholdProfileNotFoundError } from "./home-feed";
 
 export function databaseSecret(): string {
   return process.env.DATABASE_URL?.trim() ?? "";

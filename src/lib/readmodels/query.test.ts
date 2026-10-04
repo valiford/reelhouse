@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import {
   buildCatalogCountQuery,
   buildCatalogSearchQuery
-} from "./search.ts";
+} from "./browse.ts";
 import { resolvePage, resolveSearchFilters } from "./params.ts";
 
 function assertPlaceholderConsistency(query: { text: string; values: unknown[] }): void {

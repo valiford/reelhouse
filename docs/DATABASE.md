@@ -113,10 +113,15 @@ Current migrations:
    revisions, the advance-only `media_sync_state` watermark, duplicate
    `media_item_quarantine`, and the `incremental` run mode (see
    [CATALOG.md](CATALOG.md)).
-5. `0008_read_model_indexes.sql` — bounded-read indexes for the RH-0040
-   read models: a partial recent-items index (active rows, `date_created
-   DESC NULLS LAST`) and a case-folded name index for deterministic search
-   ordering. Indexes only — no rows are touched.
+5. `0008_read_model_indexes.sql` — bounded-read indexes for the read
+   models: RH-0040's partial recent-items index (active rows, `date_created
+   DESC NULLS LAST`) and case-folded name index, plus RH-0034's faceted
+   browse indexes (active title/added/rating/year). Indexes only — no rows
+   are touched.
+6. `0009_media_identity_workbench.sql` — the identity-conflict workbench
+   family (quarantine review/resolution; see [WORKBENCH.md](WORKBENCH.md)).
+7. `0010_disaster_recovery_ledgers.sql` — DR backup/restore/rebuild
+   ledgers (see [DISASTER_RECOVERY.md](DISASTER_RECOVERY.md)).
 
 ## Readiness contract (`GET /api/health`)
 

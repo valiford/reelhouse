@@ -1,6 +1,6 @@
 import { readModelResponse } from "@/lib/readmodels/api";
 import { resolveIdentifier } from "@/lib/readmodels/params";
-import { getCatalogItem } from "@/lib/readmodels/search";
+import { getCatalogItem } from "@/lib/readmodels/browse";
 
 // Catalog item detail (facets, file state, provenance stamps) by Jellyfin id.
 export const dynamic = "force-dynamic";

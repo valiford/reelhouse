@@ -29,7 +29,7 @@
 import type { QueryResultRow } from "pg";
 import type { ReadExecutor } from "./executor.ts";
 import { MAX_BUCKETS_GENRES, resolveRailLimit } from "./params.ts";
-import { type RailItemRow } from "./home.ts";
+import { type RailItemRow } from "./home-feed.ts";
 
 // History influences taste through a bounded recent window, not the whole
 // append-only log: 100 events is plenty of signal and keeps the query flat.
