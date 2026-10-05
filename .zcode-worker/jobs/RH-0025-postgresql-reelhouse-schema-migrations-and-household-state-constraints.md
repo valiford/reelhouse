@@ -1,6 +1,6 @@
 # RH-0025 — PostgreSQL ReelHouse schema migrations and household-state constraints
 
-**STATUS:** READY
+**STATUS:** BLOCKED
 **AGENT:** ZCODE
 **AUTOMATION_ELIGIBLE:** true
 **WAVE:** 2026-09-21 tomorrow priority
@@ -19,3 +19,11 @@ Create/finish versioned migrations, indexes, uniqueness/FKs, profile isolation, 
 - Existing build/lint/typecheck/runtime safety contracts remain green.
 - Migrations are versioned and diagnostics bounded/redacted.
 - Report evidence and stop in REVIEW.
+
+## Controller reconciliation — 2026-10-05
+
+Overlapping schema/sync/DR/read-model scope is delivered inside RH-0041. Hold separate implementation pending RH-0041/RH-0044 acceptance and exact residual-gap disposition; REVIEW is not accepted completion.
+
+Authoritative on origin/main; original source branches/reports/worktrees remain intact. Only READY rows in the newest execution table may be claimed.
+
+UNBLOCK_CONDITION: Accepted-main incorporation ledger for RH-0041, directly or through RH-0044, identifies residual scope; controller narrows and explicitly releases that gap.

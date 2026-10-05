@@ -1,11 +1,87 @@
 # ReelHouse — Z-Code Engineering Job Queue
 
+Origin/main is the authoritative control plane. Branch/worktree existence is lease authority. Only the newest table supplies candidate work.
+
+## Owner Execution Wave — 2026-10-05 reconciliation and reload
+
+> **Authoritative selection table.** This owner-authorized reconciliation supersedes every earlier execution/READY table. Claim only READY rows here with eligible full specs, satisfied dependencies and no local/remote lease. Historical tables are nonclaimable lineage; never fall back to historical READY labels.
+>
+> Audited origin/main: `b8d068fd6763e60e7bc628327022f03062a6e96f`. Timestamp: 2026-10-05T22:55:05Z. Remote GitHub branches, PRs, reports and accepted-main ancestry were inspected. Local Windows worktrees/processes and production state were not observed; recheck ownership at claim time. Existing REVIEW/CLAIMED/RUNNING/ACTIVE leases remain intact. Source carriers do not acquire source leases.
+>
+> **1 READY candidates**, subject to claim-time checks. Numeric reserve is conditional on useful work: this owner-authorized bounded reload permits claiming candidates even below the usual reserve target. Never invent filler or release gates for depth. Refresh main after each handoff and seek controller reconciliation after three additional REVIEW deliveries.
+>
+> Full worker prompt: [worker-2026-10-05.md](prompts/worker-2026-10-05.md) · Evidence: [reconcile-2026-10-05.md](reports/reconcile-2026-10-05.md).
+
+| Priority | Job ID | Status | Agent | Description |
+|---:|---|---|---|---|
+| 1 | RH-0044 | READY | ZCODE | [Household catalog and spoiler final review carrier](jobs/RH-0044-household-catalog-and-spoiler-final-review-carrier.md) |
+| 2 | RH-0041 | REVIEW | ZCODE | [Household and media delivery convergence](jobs/RH-0041-household-and-media-delivery-convergence.md) |
+| 3 | RH-0042 | REVIEW | ZCODE | [Unwatched-content spoiler shield](jobs/RH-0042-unwatched-content-spoiler-shield.md) |
+| 4 | RH-0043 | PROPOSED | ZCODE | [Household profile switch and cached-state isolation](jobs/RH-0043-household-profile-switch-and-cached-state-isolation.md) — explicit dependency/controller gate remains |
+| 5 | RH-0025 | BLOCKED | ZCODE | [PostgreSQL ReelHouse schema migrations and household-state constraints](jobs/RH-0025-postgresql-reelhouse-schema-migrations-and-household-state-constraints.md) — explicit dependency/controller gate remains |
+| 6 | RH-0028 | BLOCKED | ZCODE | [PostgreSQL backup restore catalog rebuild and stale-data recovery](jobs/RH-0028-postgresql-backup-restore-catalog-rebuild-and-stale-data-recovery.md) — explicit dependency/controller gate remains |
+| 7 | RH-0029 | BLOCKED | ZCODE | [TV search discovery and recommendation read models on PostgreSQL](jobs/RH-0029-tv-search-discovery-and-recommendation-read-models-on-postgresql.md) — explicit dependency/controller gate remains |
+| 8 | RH-0004 | BLOCKED | ZCODE | [Jellyfin → media_catalog Synchronization](jobs/RH-0004-jellyfin-media-catalog-sync.md) — explicit dependency/controller gate remains |
+
+### Delivery and ownership ledger — current reconciliation
+
+| Job ID | Previous state | Reconciled state | Evidence |
+|---|---|---|---|
+| RH-0038 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0039 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0040 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0030 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0031 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0032 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0033 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0034 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0035 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0036 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0037 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0024 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0026 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0027 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0022 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0023 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0015 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0016 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0017 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0018 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0019 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0020 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0021 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0008 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0009 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0010 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0011 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0012 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0013 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0014 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0002 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0003 | READY | CLAIMED | remote branch lease; completion not re-certified |
+| RH-0005 | WAITING | WAITING | prior authoritative status; local ownership unobserved |
+| RH-0006 | WAITING | WAITING | prior authoritative status; local ownership unobserved |
+| RH-0007 | WAITING | WAITING | prior authoritative status; local ownership unobserved |
+| RH-0001 | COMPLETE | COMPLETE | merged #1 |
+| RH-0041 | READY | REVIEW | Completion report on frozen remote branch head declares REVIEW. Engineering evidence is worker-reported, not independently recertified or accepted. Preserve original lease. |
+| RH-0042 | READY | REVIEW | Completion report on frozen remote branch head declares REVIEW. Engineering evidence is worker-reported, not independently recertified or accepted. Preserve original lease. |
+| RH-0025 | READY | BLOCKED | Overlapping schema/sync/DR/read-model scope is delivered inside RH-0041. Hold separate implementation pending RH-0041/RH-0044 acceptance and exact residual-gap disposition; REVIEW is not accepted completion. |
+| RH-0028 | READY | BLOCKED | Overlapping schema/sync/DR/read-model scope is delivered inside RH-0041. Hold separate implementation pending RH-0041/RH-0044 acceptance and exact residual-gap disposition; REVIEW is not accepted completion. |
+| RH-0029 | READY | BLOCKED | Overlapping schema/sync/DR/read-model scope is delivered inside RH-0041. Hold separate implementation pending RH-0041/RH-0044 acceptance and exact residual-gap disposition; REVIEW is not accepted completion. |
+| RH-0004 | READY | BLOCKED | Overlapping schema/sync/DR/read-model scope is delivered inside RH-0041. Hold separate implementation pending RH-0041/RH-0044 acceptance and exact residual-gap disposition; REVIEW is not accepted completion. |
+
+## Historical snapshots — nonclaimable
+
+Prior definitions and observations below never override the October 5 table/current specs. All prior selection instructions are superseded.
+
+### ReelHouse — Z-Code Engineering Job Queue
+
 The highest-priority READY job with satisfied dependencies and `AUTOMATION_ELIGIBLE: true` may be claimed. `origin/main` is authoritative.
 
 
-## Owner Execution Wave — 2026-10-04 reload
+### Superseded execution wave — 2026-10-04 reload
 
-> **Authoritative selection table.** This owner-authorized restock supersedes every earlier execution/READY table below. Claim only READY jobs in this table, with full-spec dependencies satisfied and no local/remote branch/worktree lease. Historical tables never provide fallback authorization.
+> **Superseded selection table; nonclaimable.** This owner-authorized restock supersedes every earlier execution/READY table below. Claim only READY jobs in this table, with full-spec dependencies satisfied and no local/remote branch/worktree lease. Historical tables never provide fallback authorization.
 >
 > Audited origin/main: `b934fc7f77f3022d16c16d1c1a7f92253fa3019f`. This remote audit observed GitHub branches and PRs; local worktrees/processes and live deployment state were not observed. Recheck ownership at claim time. After three additional jobs reach REVIEW, refresh main and review delivery evidence before proceeding. Numeric reserve is conditional on useful independent work; do not create duplicates or bypass dependency gates.
 >

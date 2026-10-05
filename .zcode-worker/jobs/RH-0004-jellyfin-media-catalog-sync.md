@@ -1,6 +1,6 @@
 # RH-0004 — Jellyfin → media_catalog Synchronization
 
-**STATUS:** READY  
+**STATUS:** BLOCKED  
 **AUTOMATION_ELIGIBLE:** true  
 **DEPENDENCY:** RH-0001 accepted — satisfied via PR #1 / `605ee8f`
 
@@ -22,3 +22,11 @@ Synchronize authoritative Jellyfin library metadata into the existing PostgreSQL
 ## Acceptance
 
 Fixture-backed synchronization proves create/update/no-change/missing/duplicate behavior and can rebuild catalog state without modifying Jellyfin.
+
+## Controller reconciliation — 2026-10-05
+
+Overlapping schema/sync/DR/read-model scope is delivered inside RH-0041. Hold separate implementation pending RH-0041/RH-0044 acceptance and exact residual-gap disposition; REVIEW is not accepted completion.
+
+Authoritative on origin/main; original source branches/reports/worktrees remain intact. Only READY rows in the newest execution table may be claimed.
+
+UNBLOCK_CONDITION: Accepted-main incorporation ledger for RH-0041, directly or through RH-0044, identifies residual scope; controller narrows and explicitly releases that gap.
