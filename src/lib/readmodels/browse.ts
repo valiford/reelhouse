@@ -48,6 +48,14 @@ export interface CatalogCardRow extends QueryResultRow {
   season_number: number | null;
   episode_number: number | null;
   synced_at: Date | string;
+  /**
+   * Profile watch state for the spoiler shield (RH-0044): true = the
+   * profile's household watch state records the item completed, false = an
+   * active watch-state row exists and is not completed, null = no watch
+   * state row (unknown — clients must shield conservatively). Only present
+   * when the query is profile-scoped; unscoped reads leave it null.
+   */
+  watched?: boolean | null;
 }
 
 const CARD_COLUMNS = `m.id, m.source, m.jellyfin_id,
@@ -56,6 +64,17 @@ const CARD_COLUMNS = `m.id, m.source, m.jellyfin_id,
        m.production_year, m.premiere_date, m.community_rating, m.official_rating,
        m.runtime_ticks, m.primary_image_tag, m.backdrop_image_tag, m.date_created,
        m.series_jellyfin_id, m.series_name, m.season_number, m.episode_number, m.synced_at`;
+
+// Profile-scoped watch-state projection: a LEFT JOIN so items without any
+// watch-state row still surface with watched = null (unknown), which
+// clients must treat as protected. Scoped to one profile and to active
+// rows, mirroring the household import's (profile, source, jellyfin_id)
+// identity.
+const WATCHED_COLUMNS = `, hws.completed AS watched`;
+const WATCHED_JOIN = (profileParam: string) => `
+       LEFT JOIN household_watch_state hws
+         ON hws.source = m.source AND hws.jellyfin_id = m.jellyfin_id
+        AND hws.profile_id = ${profileParam} AND hws.removed_at IS NULL`;
 
 // The WHERE clause is shared verbatim by the page query and the count query.
 // The caller owns ONE SqlBuilder per query and passes it in, so filter
@@ -128,15 +147,21 @@ function orderFor(sort: ResolvedSearchFilters["sort"]): OrderSpec {
 
 export function buildCatalogSearchQuery(
   filters: ResolvedSearchFilters,
-  page: { limit: number; offset: number }
+  page: { limit: number; offset: number },
+  profileId?: number
 ): { text: string; values: unknown[] } {
   const builder = new SqlBuilder();
+  // The profile parameter is numbered first so the JOIN can precede the
+  // WHERE clause in the text while the SqlBuilder's placeholder sequence
+  // stays aligned with the values array.
+  const watchedJoin = profileId === undefined ? "" : WATCHED_JOIN(builder.param(profileId));
+  const watchedColumn = profileId === undefined ? "" : WATCHED_COLUMNS;
   const where = buildFilterClause(filters, builder);
   const order = orderFor(filters.sort);
   const primary = `${order.expression} ${filters.dir.toUpperCase()}${order.nulls ? ` ${order.nulls}` : ""}`;
-  const text = `SELECT ${CARD_COLUMNS}
+  const text = `SELECT ${CARD_COLUMNS}${watchedColumn}
     FROM media_items m
-    JOIN media_libraries l ON l.id = m.library_id
+    JOIN media_libraries l ON l.id = m.library_id${watchedJoin}
     WHERE ${where}
     ORDER BY ${primary}, m.id ${filters.dir.toUpperCase()}
     LIMIT ${builder.param(page.limit)} OFFSET ${builder.param(page.offset)}`;
@@ -169,9 +194,10 @@ export interface CatalogSearchPage {
 export async function searchCatalogItems(
   executor: ReadExecutor,
   filters: ResolvedSearchFilters,
-  page: { limit: number; offset: number }
+  page: { limit: number; offset: number },
+  options: { profileId?: number } = {}
 ): Promise<CatalogSearchPage> {
-  const pageQuery = buildCatalogSearchQuery(filters, page);
+  const pageQuery = buildCatalogSearchQuery(filters, page, options.profileId);
   const countQuery = buildCatalogCountQuery(filters);
   const [pageResult, countResult] = await Promise.all([
     executor.query<CatalogCardRow>(pageQuery.text, pageQuery.values),
@@ -217,15 +243,18 @@ export interface CatalogItemDetail {
 
 export async function getCatalogItem(
   executor: ReadExecutor,
-  jellyfinId: string
+  jellyfinId: string,
+  options: { profileId?: number } = {}
 ): Promise<CatalogItemDetail> {
+  const builder = new SqlBuilder();
+  const profileParam = options.profileId === undefined ? null : builder.param(options.profileId);
   const itemResult = await executor.query<CatalogCardRow>(
-    `SELECT ${CARD_COLUMNS}
+    `SELECT ${CARD_COLUMNS}${profileParam ? WATCHED_COLUMNS : ""}
      FROM media_items m
-     JOIN media_libraries l ON l.id = m.library_id
-     WHERE m.source = 'jellyfin' AND m.jellyfin_id = $1 AND m.removed_at IS NULL AND l.removed_at IS NULL
+     JOIN media_libraries l ON l.id = m.library_id${profileParam ? WATCHED_JOIN(profileParam) : ""}
+     WHERE m.source = 'jellyfin' AND m.jellyfin_id = ${builder.param(jellyfinId)} AND m.removed_at IS NULL AND l.removed_at IS NULL
      LIMIT 1`,
-    [jellyfinId]
+    builder.values
   );
   const item = itemResult.rows[0];
   if (!item) throw new CatalogItemNotFoundError(jellyfinId);

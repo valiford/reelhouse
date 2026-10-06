@@ -41,6 +41,8 @@ import {
   resolveProfile
 } from "./home-feed.ts";
 import { recommendationInputs } from "./recommendations.ts";
+import { getCatalogItem, searchCatalogItems } from "./browse.ts";
+import { resolvePage, resolveSearchFilters } from "./params.ts";
 
 const MIGRATIONS_DIR = fileURLToPath(new URL("../../../db/migrations", import.meta.url));
 const TEMP_DB = "reelhouse_rh0034b_tmp";
@@ -363,6 +365,64 @@ test("every rail kind resolves against the live household and catalog state", as
       assert.ok(rail.items.length <= 2, `rail ${rail.slug} respects the cap`);
     }
     assert.deepEqual(idsOf(railOf(capped, "recently_added").items), ["mov-recent", "mov-unrated"]);
+  });
+});
+
+test("every rail card carries its profile's spoiler watch state (RH-0044)", async (t) => {
+  await withSeededHousehold(t, async (db) => {
+    const feed = await valiFeed(db);
+
+    // Continue-watching rows ARE active watch state: in progress, so unplayed.
+    for (const item of railOf(feed, "continue_watching").items) {
+      assert.equal(item.watched, false, `${item.jellyfin_id} in progress is unplayed`);
+    }
+
+    // The same catalog item answers differently per rail only through the
+    // profile's single watch-state row.
+    const byId = (slug: string) =>
+      new Map(railOf(feed, slug).items.map((item) => [item.jellyfin_id, item.watched]));
+    assert.equal(byId("recently_added").get("mov-fresh"), true, "completed watch row is watched");
+    assert.equal(byId("movies").get("mov-fresh"), true);
+    assert.equal(byId("movie_night").get("mov-fresh"), true);
+    assert.equal(byId("recently_added").get("mov-arrival"), false, "active row, not completed");
+    assert.equal(byId("favorites").get("mov-arrival"), false);
+    assert.equal(byId("recently_added").get("mov-unrated"), null, "no watch row is unknown, never guessed");
+
+    // Profile isolation extends to watch state: Nicole's completed item is
+    // unknown (null) in Vali's rails, and watched in hers.
+    assert.equal(byId("recently_added").get("mov-recent"), null, "Nicole's completion is invisible to Vali");
+    const nicole = await homeFeed(db.read, { profileSlug: "nicole" });
+    const herOnly = railOf(nicole, "favorites").items[0];
+    assert.equal(herOnly.jellyfin_id, "mov-recent");
+    assert.equal(herOnly.watched, true, "Nicole's own completion marks it watched");
+  });
+});
+
+test("search and detail carry the scoped profile watch state (RH-0044)", async (t) => {
+  await withSeededHousehold(t, async (db) => {
+    const vali = await resolveProfile(db.read, "vali");
+    const valiId = Number(vali.id);
+
+    // Profile-scoped search: each result answers with Vali's watch state.
+    const scoped = await searchCatalogItems(
+      db.read, resolveSearchFilters({}), resolvePage({ limit: 100 }), { profileId: valiId }
+    );
+    const watchedById = new Map(scoped.items.map((item) => [item.jellyfin_id, item.watched]));
+    assert.equal(watchedById.get("mov-fresh"), true, "completed is watched");
+    assert.equal(watchedById.get("mov-arrival"), false, "active row is unplayed");
+    assert.equal(watchedById.get("mov-unrated"), null, "no row is unknown");
+
+    // Unscoped search serves unknown for everything — clients fail closed.
+    const unscoped = await searchCatalogItems(db.read, resolveSearchFilters({}), resolvePage({ limit: 100 }));
+    for (const item of unscoped.items) {
+      assert.equal(item.watched ?? null, null, "unscoped reads never claim a watch state");
+    }
+
+    // Detail mirrors the same scoping.
+    const detailScoped = await getCatalogItem(db.read, "mov-fresh", { profileId: valiId });
+    assert.equal(detailScoped.item.watched, true);
+    const detailUnscoped = await getCatalogItem(db.read, "mov-fresh");
+    assert.equal(detailUnscoped.item.watched ?? null, null);
   });
 });
 

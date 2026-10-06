@@ -113,12 +113,16 @@ export interface HomeRail {
 
 // A rail item is a catalog card plus whatever household context the rail is
 // about (watch progress, list position). Fields are optional because only
-// the continue-watching rail carries progress.
+// the continue-watching rail carries progress. `watched` is the profile's
+// spoiler-shield watch state (RH-0044): true = completed, false = active
+// row and not completed, null/absent = no watch-state row (unknown —
+// clients shield conservatively).
 export type RailItemRow = CatalogCardRow & {
   position_ticks?: string | null;
   duration_ticks?: string | null;
   last_played_at?: Date | string | null;
   rail_position?: string | number;
+  watched?: boolean | null;
 };
 
 const RAIL_CARD_COLUMNS = `m.id, m.source, m.jellyfin_id,
@@ -128,9 +132,17 @@ const RAIL_CARD_COLUMNS = `m.id, m.source, m.jellyfin_id,
     m.runtime_ticks, m.primary_image_tag, m.backdrop_image_tag, m.date_created,
     m.series_jellyfin_id, m.series_name, m.season_number, m.episode_number, m.synced_at`;
 
+// Watch-state projection for every rail: LEFT JOIN so unrated-by-watch-state
+// items still render with watched = null (unknown stays protected). Always
+// scoped to the feed's resolved profile — one profile's watch state can
+// never leak into another's rails.
+const RAIL_WATCHED_COLUMN = `, hws.completed AS watched`;
+const RAIL_WATCHED_JOIN = "LEFT JOIN household_watch_state hws ON hws.source = m.source AND hws.jellyfin_id = m.jellyfin_id AND hws.profile_id = $1 AND hws.removed_at IS NULL";
+
 const RAIL_FROM = `FROM %TABLE% r
   JOIN media_items m ON m.source = r.source AND m.jellyfin_id = r.jellyfin_id AND m.removed_at IS NULL
-  JOIN media_libraries l ON l.id = m.library_id`;
+  JOIN media_libraries l ON l.id = m.library_id
+  ${RAIL_WATCHED_JOIN}`;
 
 export async function listHomeRows(
   executor: ReadExecutor,
@@ -152,7 +164,7 @@ async function continueWatchingRail(
   limit: number
 ): Promise<RailItemRow[]> {
   const result = await executor.query<RailItemRow>(
-    `SELECT ${RAIL_CARD_COLUMNS}, hws.position_ticks, hws.duration_ticks, hws.last_played_at
+    `SELECT ${RAIL_CARD_COLUMNS}, hws.position_ticks, hws.duration_ticks, hws.last_played_at${RAIL_WATCHED_COLUMN}
      FROM household_watch_state hws
      JOIN media_items m ON m.source = hws.source AND m.jellyfin_id = hws.jellyfin_id AND m.removed_at IS NULL
      JOIN media_libraries l ON l.id = m.library_id
@@ -169,19 +181,21 @@ async function continueWatchingRail(
 
 async function recentlyAddedRail(
   executor: ReadExecutor,
+  profileId: number,
   libraryJellyfinId: string | null,
   limit: number
 ): Promise<RailItemRow[]> {
   const builder = [`m.removed_at IS NULL`, `l.removed_at IS NULL`];
-  const params: unknown[] = [];
+  const params: unknown[] = [profileId];
   if (libraryJellyfinId !== null) {
     params.push(libraryJellyfinId);
     builder.push(`l.jellyfin_id = $${params.length}`);
   }
   const result = await executor.query<RailItemRow>(
-    `SELECT ${RAIL_CARD_COLUMNS}
+    `SELECT ${RAIL_CARD_COLUMNS}${RAIL_WATCHED_COLUMN}
      FROM media_items m
      JOIN media_libraries l ON l.id = m.library_id
+     ${RAIL_WATCHED_JOIN}
      WHERE ${builder.join(" AND ")}
      ORDER BY COALESCE(m.date_created, m.first_seen_at) DESC, m.id DESC
      LIMIT ${limit}`,
@@ -196,7 +210,7 @@ async function favoritesRail(
   limit: number
 ): Promise<RailItemRow[]> {
   const result = await executor.query<RailItemRow>(
-    `SELECT ${RAIL_CARD_COLUMNS}, r.position AS rail_position
+    `SELECT ${RAIL_CARD_COLUMNS}, r.position AS rail_position${RAIL_WATCHED_COLUMN}
      ${RAIL_FROM.replace("%TABLE%", "household_favorites")}
      WHERE r.profile_id = $1 AND r.removed_at IS NULL
      ORDER BY r.position, r.jellyfin_id
@@ -208,36 +222,40 @@ async function favoritesRail(
 
 async function libraryRail(
   executor: ReadExecutor,
+  profileId: number,
   libraryJellyfinId: string,
   limit: number
 ): Promise<RailItemRow[]> {
   const result = await executor.query<RailItemRow>(
-    `SELECT ${RAIL_CARD_COLUMNS}
+    `SELECT ${RAIL_CARD_COLUMNS}${RAIL_WATCHED_COLUMN}
      FROM media_items m
      JOIN media_libraries l ON l.id = m.library_id
-     WHERE l.jellyfin_id = $1 AND m.removed_at IS NULL AND l.removed_at IS NULL
+     ${RAIL_WATCHED_JOIN}
+     WHERE l.jellyfin_id = $2 AND m.removed_at IS NULL AND l.removed_at IS NULL
      ORDER BY lower(COALESCE(m.sort_name, m.name)), m.id
      LIMIT ${limit}`,
-    [libraryJellyfinId]
+    [profileId, libraryJellyfinId]
   );
   return result.rows;
 }
 
 async function collectionRail(
   executor: ReadExecutor,
+  profileId: number,
   collectionSlug: string,
   limit: number
 ): Promise<RailItemRow[]> {
   const result = await executor.query<RailItemRow>(
-    `SELECT ${RAIL_CARD_COLUMNS}, r.position AS rail_position
+    `SELECT ${RAIL_CARD_COLUMNS}, r.position AS rail_position${RAIL_WATCHED_COLUMN}
      FROM household_collections c
      JOIN household_collection_entries r ON r.collection_id = c.id AND r.removed_at IS NULL
      JOIN media_items m ON m.source = r.source AND m.jellyfin_id = r.jellyfin_id AND m.removed_at IS NULL
      JOIN media_libraries l ON l.id = m.library_id
-     WHERE c.slug = $1 AND c.archived_at IS NULL
+     ${RAIL_WATCHED_JOIN}
+     WHERE c.slug = $2 AND c.archived_at IS NULL
      ORDER BY r.position, r.jellyfin_id
      LIMIT ${limit}`,
-    [collectionSlug]
+    [profileId, collectionSlug]
   );
   return result.rows;
 }
@@ -249,11 +267,12 @@ async function watchlistRail(
   limit: number
 ): Promise<RailItemRow[]> {
   const result = await executor.query<RailItemRow>(
-    `SELECT ${RAIL_CARD_COLUMNS}, r.position AS rail_position
+    `SELECT ${RAIL_CARD_COLUMNS}, r.position AS rail_position${RAIL_WATCHED_COLUMN}
      FROM household_watchlists w
      JOIN household_watchlist_entries r ON r.watchlist_id = w.id AND r.removed_at IS NULL
      JOIN media_items m ON m.source = r.source AND m.jellyfin_id = r.jellyfin_id AND m.removed_at IS NULL
      JOIN media_libraries l ON l.id = m.library_id
+     ${RAIL_WATCHED_JOIN}
      WHERE w.profile_id = $1 AND w.slug = $2 AND w.archived_at IS NULL
      ORDER BY r.position, r.jellyfin_id
      LIMIT ${limit}`,
@@ -328,7 +347,7 @@ export async function resolveHomeRail(
       return {
         ...empty,
         resolved: true,
-        items: await recentlyAddedRail(executor, library, limit)
+        items: await recentlyAddedRail(executor, profileId, library, limit)
       };
     }
     case "favorites": {
@@ -341,7 +360,7 @@ export async function resolveHomeRail(
       return {
         ...empty,
         resolved: true,
-        items: await libraryRail(executor, library, limit)
+        items: await libraryRail(executor, profileId, library, limit)
       };
     }
     case "collection": {
@@ -351,7 +370,7 @@ export async function resolveHomeRail(
       return {
         ...empty,
         resolved: true,
-        items: await collectionRail(executor, collection, limit)
+        items: await collectionRail(executor, profileId, collection, limit)
       };
     }
     case "watchlist": {

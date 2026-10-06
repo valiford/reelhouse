@@ -109,3 +109,26 @@ test("query text interpolates no client-controlled strings", () => {
   assert.doesNotMatch(text, /DROP TABLE/);
   assert.doesNotMatch(text, /Sci'Fi/);
 });
+
+test("profile-scoped search joins the spoiler watch state as the first parameter (RH-0044)", () => {
+  const filters = resolveSearchFilters({ q: "arrival" });
+  const page = resolvePage({ limit: 10, offset: 20 });
+  const query = buildCatalogSearchQuery(filters, page, 42);
+  assertPlaceholderConsistency(query);
+  assert.match(query.text, /LEFT JOIN household_watch_state hws/, "watch state rides a LEFT JOIN, not an inner filter");
+  assert.match(query.text, /hws\.profile_id = \$1/, "the join is scoped to exactly one profile");
+  assert.match(query.text, /hws\.removed_at IS NULL/, "tombstoned watch rows never answer the shield");
+  assert.match(query.text, /hws\.completed AS watched/);
+  assert.equal(query.values[0], 42, "the profile parameter owns $1 ahead of the filter values");
+  // Without a profile there is no join at all: watched stays unknown and
+  // clients shield conservatively.
+  const bare = buildCatalogSearchQuery(filters, page);
+  assert.doesNotMatch(bare.text, /household_watch_state/);
+  assert.doesNotMatch(bare.text, /watched/);
+});
+
+test("the watch-state join never reaches the count query", () => {
+  const count = buildCatalogCountQuery(resolveSearchFilters({ q: "arrival" }));
+  assert.doesNotMatch(count.text, /household_watch_state/);
+  assert.doesNotMatch(count.text, /watched/);
+});

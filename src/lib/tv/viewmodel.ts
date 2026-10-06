@@ -36,6 +36,12 @@ export interface CatalogCardPayload {
   series_name?: string | null;
   season_number?: number | null;
   episode_number?: number | null;
+  /**
+   * Spoiler-shield watch state (RH-0044): true = played for the scoped
+   * profile, false = confirmed unplayed, null/undefined = unknown (no
+   * watch-state row or no profile scoped — clients shield conservatively).
+   */
+  watched?: boolean | null;
 }
 
 export interface RailItemPayload extends CatalogCardPayload {
@@ -110,6 +116,8 @@ export interface UiCard {
   kindLabel: string;
   rating: number | null;
   progress: number | null;
+  /** true = played, false = unplayed, null = unknown (shielded). */
+  watched: boolean | null;
   imageUrl: string | null;
   backdropUrl: string | null;
   playHref: string | null;
@@ -198,6 +206,7 @@ function toCard(
     kindLabel: kindLabel(row.item_type),
     rating: row.community_rating === null ? null : Number(row.community_rating),
     progress,
+    watched: row.watched === true ? true : row.watched === false ? false : null,
     imageUrl: jellyfinImageUrl(publicUrl, row.jellyfin_id, "Primary", row.primary_image_tag),
     backdropUrl: jellyfinImageUrl(publicUrl, row.jellyfin_id, "Backdrop", row.backdrop_image_tag),
     playHref: playHref(publicUrl, row.jellyfin_id)
@@ -258,6 +267,8 @@ export interface UiDetail {
   rating: number | null;
   officialRating: string | null;
   overview: string | null;
+  /** true = played, false = unplayed, null = unknown (shielded). */
+  watched: boolean | null;
   libraryName: string;
   genres: string[];
   studios: string[];
@@ -284,6 +295,7 @@ export function detailView(payload: ItemDetailPayload, publicUrl: string | null)
     rating: card.community_rating === null ? null : Number(card.community_rating),
     officialRating: card.official_rating ?? null,
     overview: payload.overview,
+    watched: card.watched === true ? true : card.watched === false ? false : null,
     libraryName: card.library_name,
     genres: payload.genres,
     studios: payload.studios,

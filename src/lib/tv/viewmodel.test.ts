@@ -258,3 +258,18 @@ test("statusBanner composes Jellyfin health and catalog freshness in priority or
   assert.equal(statusBanner(fresh, { state: "unconfigured" }), null);
   assert.equal(statusBanner(null, null), null);
 });
+
+test("cards carry the scoped profile watch state the shield needs (RH-0044)", () => {
+  assert.equal(cardFromCatalog(cardRow({ watched: true }), "k", PUBLIC_URL).watched, true);
+  assert.equal(cardFromCatalog(cardRow({ watched: false }), "k", PUBLIC_URL).watched, false);
+  assert.equal(cardFromRailItem(cardRow({ watched: true }), "k", PUBLIC_URL).watched, true);
+  // Unknown (null or absent) normalizes to null — clients shield conservatively.
+  assert.equal(cardFromCatalog(cardRow({ watched: null }), "k", PUBLIC_URL).watched, null);
+  assert.equal(cardFromCatalog(cardRow(), "k", PUBLIC_URL).watched, null);
+});
+
+test("detailView carries the scoped watch state through to the modal", () => {
+  assert.equal(detailView(detailPayload({ item: cardRow({ watched: false }) }), PUBLIC_URL).watched, false);
+  assert.equal(detailView(detailPayload({ item: cardRow({ watched: true }) }), PUBLIC_URL).watched, true);
+  assert.equal(detailView(detailPayload(), PUBLIC_URL).watched, null);
+});
