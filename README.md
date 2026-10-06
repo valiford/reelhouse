@@ -85,6 +85,86 @@ Then check `GET /` (app shell), `GET /api/library`, and
 full imported-source baseline: deployment mapping, data authorities,
 and the PostgreSQL 18 migration surface.
 
+### Database (PostgreSQL 18)
+
+Server-side only; clients never see database credentials. `DATABASE_URL`
+(blank = demo mode) configures the least-privilege application role;
+`npm run db:migrate` applies the versioned migrations in `db/migrations/`
+with the owner role. `GET /api/health` reports database readiness, migration
+state, and Jellyfin reachability. Full configuration, role model, and the
+verification runbook: [docs/DATABASE.md](docs/DATABASE.md).
+
+### Media catalog sync
+
+The media catalog (the `media_*` tables) is a normalized, provenance-
+preserving mirror of the Jellyfin library, loaded server-side with
+`npm run catalog:sync` — libraries, movies, series, seasons, episodes,
+people, genres, studios, file state, external IDs, and per-run sync history.
+`npm run catalog:sync -- --incremental` refreshes only what changed since
+the last successful run (watermark-windowed deltas plus presence sweeps),
+recording an append-only change history (added/updated/removed/restored)
+and quarantining conflicting duplicate identities without touching them.
+Jellyfin stays the playback/library authority and is only ever reached
+through its API. Schema, identity model, reconciliation semantics, and the
+deterministic verification workflow (including a local Jellyfin stub):
+[docs/CATALOG.md](docs/CATALOG.md).
+
+### Household state import
+
+Household-owned state — profiles, preferences, favorites, watchlists,
+curated collections, home-screen rows, the continue-watching overlay,
+playback history, and Jellyfin account/item links — lives in the
+`household_*` tables and is loaded server-side with
+`npm run household:import -- path/to/snapshot.json`. A snapshot is a
+complete JSON description of the household; the import is idempotent
+(re-importing an unchanged snapshot writes nothing), tombstones instead of
+deleting (so re-adding preserves original history), archives absent
+profiles without touching their data, and structurally isolates every
+profile. Item links resolve against the media catalog automatically as the
+catalog catches up. Schema, identity model, manifest contract, and
+verification: [docs/HOUSEHOLD.md](docs/HOUSEHOLD.md).
+
+### PostgreSQL read models (search, home rails, freshness)
+
+Once catalog and household state are loaded, clients are served from
+bounded, indexed read models: `/api/catalog/search` (filter/paginate the
+active catalog), `/api/catalog/items/{id}` (detail with facets),
+`/api/catalog/status` (catalog freshness and degraded-state surface), and
+`/api/home` (a profile's home rows resolved into item rails — continue
+watching, recently added, favorites, libraries, collections, watchlists).
+Every result set is capped, every order is deterministic, profile isolation
+is structural, and catalog churn (items removed from Jellyfin) drops out of
+rails on the next read without touching household state. Endpoints, bounds,
+and semantics: [docs/READMODELS.md](docs/READMODELS.md).
+
+The TV/living-room UI consumes exactly these read models: the home feed
+renders `/api/home` rails, search drives `/api/catalog/search`, item detail
+opens `/api/catalog/items/{id}`, and `/api/catalog/status` + `/api/health`
+drive the degraded-state banners (with the bundled demo library taking over
+only when the database is unconfigured). Remote/keyboard interaction —
+deterministic arrow-key focus order, Enter/Back behavior, visible focus,
+modal escape with focus restore, skeleton/error states, and 10-foot density
+tiers — is specified in [docs/TV_REMOTE.md](docs/TV_REMOTE.md); the focus
+engine and payload mappers are hermetically tested under `npm test`.
+
+
+```bash
+npm test         # hermetic unit matrices
+npm run test:int # integration + least-privilege role smoke (disposable local PG18)
+```
+
+### Read models & disaster recovery
+
+With `DATABASE_URL` set and a synced catalog, the home screen and search
+are served from indexed PostgreSQL read models (`source: "catalog"`)
+instead of live Jellyfin calls — per-profile rails, bounded search, and a
+catalog freshness block on `/api/health`. Jellyfin stays the playback
+authority; an unreachable Jellyfin no longer degrades the home screen when
+the catalog is synced. Backup/restore acceptance (`npm run dr:verify`)
+round-trips a pg_dump into a scratch database and verifies every table by
+count and digest; the durable-vs-rebuildable split, RTO/RPO notes, and
+recovery runbook: [docs/DR.md](docs/DR.md).
+
 ## Security note
 
 Media is mounted read-only. Do not expose ports 8096 or 3210 directly to the public Internet. Use a VPN such as Tailscale for remote access.
