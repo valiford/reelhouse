@@ -1,6 +1,6 @@
 # RH-0044 — Household catalog and spoiler final review carrier
 
-STATUS: READY
+STATUS: REVIEW
 AGENT: ZCODE
 AUTOMATION_ELIGIBLE: true
 BASE: origin/main
