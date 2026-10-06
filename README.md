@@ -16,10 +16,43 @@ A private, household media interface for Synology NAS users. ReelHouse uses Jell
 - Continue Watching / Recently Added / Movies / Shows rails
 - Search
 - Metadata detail modal
+- Spoiler shield for unwatched content
 - Jellyfin library connection with demo fallback
 - Docker Compose for Synology
 - Read-only media mounts
 - Optional /dev/dri hardware transcoding passthrough
+
+## Spoiler shield
+
+ReelHouse hides spoilers for titles a household member has not finished
+watching. Each profile gets its own shield preference in the top bar; it
+defaults to **on** so unknown watch states stay protected too. Profiles
+are addressed by the URL (`?profile=<slug>`) and the top-bar pill shows
+the resolved household profile.
+
+While the shield is on for a profile:
+
+- plot synopses are replaced with a short notice on the detail modal and
+  any surface that renders description text;
+- poster and backdrop previews are hidden behind a neutral placeholder
+  for unwatched titles (episodes included), and preview imagery returns
+  through the same control;
+- every shielded card, the hero, and the detail modal expose a clear,
+  reversible **Reveal** action for that one item, and **Hide** restores
+  the mask immediately;
+- switching profiles (a different `?profile=` address) clears any
+  reveals and loads that profile's own preference, so one profile's
+  revealed spoilers never leak into another's rows, search results, or
+  cached content.
+
+Watch state is read-only from Jellyfin: only Jellyfin's
+`UserData.Played` marks a title watched. In PostgreSQL mode that state
+reaches the UI per profile through the household import's watch-state
+table (`watched` true/false on every home, search, and detail card;
+unknown stays protected). Playback progress alone never unmasks
+content. The preference is stored per browser profile (`localStorage`);
+server-side household-preference persistence arrives with the
+household-state jobs on the roadmap.
 
 ## Synology quick start
 
@@ -77,6 +110,7 @@ env vars are unset:
 npm install
 npm run lint
 npm run typecheck
+npm test
 npm run build && npm start
 ```
 

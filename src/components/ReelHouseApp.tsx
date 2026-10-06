@@ -1,8 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { MediaItem } from "@/lib/types";
 import { demoLibrary } from "@/lib/demo";
+import {
+  DEFAULT_SPOILER_SHIELD_PREFERENCE,
+  SPOILER_SHIELD_COPY,
+  isSpoilerShielded,
+  readProfileSpoilerShieldPreference,
+  writeProfileSpoilerShieldPreference,
+  type SpoilerShieldPreference,
+  type SpoilerShieldStore
+} from "@/lib/spoiler";
 import { buildFocusMap, firstFocusable, moveFocus, type Direction, type FocusSpot } from "@/lib/tv/navigation";
 import {
   cardFromCatalog,
@@ -17,7 +26,7 @@ import {
   type UiCard,
   type UiRail
 } from "@/lib/tv/viewmodel";
-import { HomeIcon, InfoIcon, PlayIcon, SearchIcon } from "./icons";
+import { HomeIcon, InfoIcon, PlayIcon, SearchIcon, ShieldIcon } from "./icons";
 
 // The living-room UI consumes the PostgreSQL read models (RH-0034) through
 // their HTTP surface and never touches the database itself: /api/home for the
@@ -27,6 +36,12 @@ import { HomeIcon, InfoIcon, PlayIcon, SearchIcon } from "./icons";
 // back to the documented demo mode (demo library + /api/search) so a fresh
 // checkout still demonstrates the full remote-control interaction layer.
 // Playback remains a Jellyfin deep link — ReelHouse never streams.
+//
+// Spoiler shield (RH-0044): cards carry the scoped profile's watch state
+// (watched true/false/null). While the per-profile preference is "shield",
+// unwatched and unknown-state titles render masked — poster, backdrop and
+// synopsis suppressed — until an explicit identity-keyed Reveal, and the
+// revealed set never crosses profiles. Progress alone never implies watched.
 
 type Boot =
   | { phase: "boot" }
@@ -84,6 +99,7 @@ function cardFromDemo(item: MediaItem, keyPrefix: string): UiCard {
     kindLabel: item.kind,
     rating: item.rating ?? null,
     progress: typeof item.progress === "number" ? Math.min(100, Math.round(item.progress)) : null,
+    watched: item.watched === true ? true : item.watched === false ? false : null,
     imageUrl: item.imageUrl ?? null,
     backdropUrl: item.backdropUrl ?? null,
     playHref: null
@@ -120,6 +136,7 @@ function detailFromCard(card: UiCard): ReturnType<typeof detailView> {
     rating: card.rating,
     officialRating: null,
     overview: card.subtitle,
+    watched: card.watched,
     libraryName: "",
     genres: [],
     studios: [],
@@ -154,42 +171,112 @@ function useColumns(): number {
   return columns;
 }
 
+function spoilerStore(): SpoilerShieldStore | null {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return null;
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+const shieldListeners = new Set<() => void>();
+
+function subscribeToShieldPreference(listener: () => void): () => void {
+  shieldListeners.add(listener);
+  window.addEventListener("storage", listener);
+  return () => {
+    shieldListeners.delete(listener);
+    window.removeEventListener("storage", listener);
+  };
+}
+
+function setStoredShieldPreference(profile: string, preference: SpoilerShieldPreference): void {
+  writeProfileSpoilerShieldPreference(spoilerStore(), profile, preference);
+  for (const listener of shieldListeners) listener();
+}
+
+type ShieldState = {
+  /** This item is inside the shield (unwatched/unknown while the preference is on). */
+  protectedItem: boolean;
+  /** Synopsis and preview imagery are currently hidden. */
+  masked: boolean;
+  /** This item was deliberately revealed and can be re-hidden. */
+  revealed: boolean;
+};
+
+const SHIELD_OFF: ShieldState = { protectedItem: false, masked: false, revealed: false };
+
 function Card({
   card,
   focusId,
   isFocused,
   onCardFocus,
-  onOpen
+  onOpen,
+  shield,
+  chipFocusId,
+  chipFocused,
+  onChipFocus,
+  onToggleReveal
 }: {
   card: UiCard;
   focusId: string;
   isFocused: boolean;
   onCardFocus: (id: string) => void;
   onOpen: (card: UiCard, opener: string) => void;
+  shield: ShieldState;
+  chipFocusId: string | null;
+  chipFocused: boolean;
+  onChipFocus: (id: string) => void;
+  onToggleReveal: (id: string) => void;
 }) {
   return (
+    <div className="media-card-wrap">
       <button
         className="media-card"
         data-focus-id={focusId}
         tabIndex={isFocused ? 0 : -1}
-        aria-label={`Open ${card.title}${card.progress !== null ? `, ${card.progress}% watched` : ""}`}
+        aria-label={`Open ${card.title}${card.progress !== null ? `, ${card.progress}% watched` : ""}${
+          shield.masked ? " — spoilers hidden" : ""
+        }`}
         onFocus={() => onCardFocus(focusId)}
         onClick={() => onOpen(card, focusId)}
       >
-      <div className="poster" style={card.imageUrl ? { backgroundImage: `url(${card.imageUrl})` } : undefined}>
-        {!card.imageUrl && <span aria-hidden>{card.title.slice(0, 1)}</span>}
-        <div className="card-gradient" />
-        <div className="card-copy">
-          <strong>{card.title}</strong>
-          <small>{card.subtitle || card.year || card.kindLabel}</small>
-        </div>
-        {card.progress !== null && (
-          <div className="progress">
-            <span style={{ width: `${card.progress}%` }} />
+        <div
+          className={shield.masked ? "poster spoiler-masked" : "poster"}
+          style={!shield.masked && card.imageUrl ? { backgroundImage: `url(${card.imageUrl})` } : undefined}
+        >
+          {shield.masked ? (
+            <span className="poster-shield"><ShieldIcon /></span>
+          ) : (
+            !card.imageUrl && <span aria-hidden>{card.title.slice(0, 1)}</span>
+          )}
+          <div className="card-gradient" />
+          <div className="card-copy">
+            <strong>{card.title}</strong>
+            <small>{card.subtitle || card.year || card.kindLabel}</small>
           </div>
-        )}
-      </div>
-    </button>
+          {card.progress !== null && (
+            <div className="progress">
+              <span style={{ width: `${card.progress}%` }} />
+            </div>
+          )}
+        </div>
+      </button>
+      {shield.protectedItem && chipFocusId && (
+        <button
+          className="reveal-chip"
+          data-focus-id={chipFocusId}
+          tabIndex={chipFocused ? 0 : -1}
+          aria-pressed={shield.revealed}
+          aria-label={shield.revealed ? `Hide spoilers for ${card.title}` : `Reveal spoilers for ${card.title}`}
+          onFocus={() => onChipFocus(chipFocusId)}
+          onClick={() => onToggleReveal(card.jellyfinId)}
+        >
+          {shield.revealed ? SPOILER_SHIELD_COPY.hideItem : SPOILER_SHIELD_COPY.revealItem}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -286,6 +373,56 @@ export default function ReelHouseApp() {
     [boot]
   );
 
+  // The spoiler preference is keyed by the resolved household identity: the
+  // feed's profile display name once loaded, the URL slug before that, and
+  // "demo" in demo mode (which has no household). Until an identity exists
+  // the preference reads conservative-by-default.
+  const profileKey = activeProfile?.display_name ?? (profileSlug ?? "demo");
+
+  // Reveals are ephemeral session state and never cross profiles: when the
+  // resolved profile identity changes, the set resets during render — before
+  // any masked card can read it — so one profile's reveals can never leak
+  // into another's UI. They also reset whenever the shield toggles.
+  const [revealedIds, setRevealedIds] = useState<ReadonlySet<string>>(new Set());
+  const [revealedProfile, setRevealedProfile] = useState(profileKey);
+  if (revealedProfile !== profileKey) {
+    setRevealedProfile(profileKey);
+    setRevealedIds(new Set());
+  }
+
+  const spoilerShield = useSyncExternalStore(
+    subscribeToShieldPreference,
+    () => readProfileSpoilerShieldPreference(spoilerStore(), profileKey),
+    () => DEFAULT_SPOILER_SHIELD_PREFERENCE
+  );
+
+  const shieldFor = useCallback(
+    (card: UiCard): ShieldState => {
+      if (spoilerShield !== "shield" || card.watched === true) return SHIELD_OFF;
+      const revealed = revealedIds.has(card.jellyfinId);
+      return {
+        protectedItem: true,
+        masked: isSpoilerShielded({ watched: card.watched ?? undefined }, spoilerShield, revealed),
+        revealed
+      };
+    },
+    [spoilerShield, revealedIds]
+  );
+
+  const toggleReveal = useCallback((id: string) => {
+    setRevealedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleSpoilerShield = useCallback(() => {
+    setStoredShieldPreference(profileKey, spoilerShield === "shield" ? "show" : "shield");
+    setRevealedIds(new Set());
+  }, [profileKey, spoilerShield]);
+
   const unresolvedCount = useMemo(
     () => (boot.phase === "ready" ? boot.feed.rows.filter((row) => row.enabled && !row.resolved).length : 0),
     [boot]
@@ -297,6 +434,8 @@ export default function ReelHouseApp() {
 
   // Search effect: debounced, bounded, mode-aware (PG read models in ready
   // mode, the demo route in demo mode). Both paths land in SearchResults.
+  // The profile rides along so every page carries profile-scoped watch
+  // state for the shield.
   useEffect(() => {
     if (mode !== "search" || (boot.phase !== "ready" && boot.phase !== "demo")) return;
     const controller = new AbortController();
@@ -326,6 +465,7 @@ export default function ReelHouseApp() {
         if (filters.q.trim()) params.set("q", filters.q.trim());
         for (const type of filters.types) params.append("types", type);
         if (filters.library) params.set("libraries", filters.library);
+        if (profileSlug) params.set("profile", profileSlug);
         params.set("limit", String(SEARCH_PAGE_SIZE));
         const res = await fetch(`/api/catalog/search?${params.toString()}`, { signal: controller.signal });
         const body = await res.json().catch(() => null);
@@ -342,7 +482,7 @@ export default function ReelHouseApp() {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [mode, boot.phase, filters, searchTick, publicUrl]);
+  }, [mode, boot.phase, filters, searchTick, publicUrl, profileSlug]);
 
   async function loadMore() {
     if (boot.phase !== "ready" || !results?.hasMore) return;
@@ -351,6 +491,7 @@ export default function ReelHouseApp() {
     if (filters.q.trim()) params.set("q", filters.q.trim());
     for (const type of filters.types) params.append("types", type);
     if (filters.library) params.set("libraries", filters.library);
+    if (profileSlug) params.set("profile", profileSlug);
     params.set("limit", String(SEARCH_PAGE_SIZE));
     params.set("offset", String(offset));
     try {
@@ -384,7 +525,8 @@ export default function ReelHouseApp() {
       setDetail({ phase: "loading", card });
       (async () => {
         try {
-          const res = await fetch(`/api/catalog/items/${encodeURIComponent(card.jellyfinId)}`);
+          const detailQuery = profileSlug ? `?profile=${encodeURIComponent(profileSlug)}` : "";
+          const res = await fetch(`/api/catalog/items/${encodeURIComponent(card.jellyfinId)}${detailQuery}`);
           const raw = (await res.json().catch(() => null)) as { detail?: string } | ItemDetailPayload | null;
           const errorDetail = raw && "detail" in raw && typeof raw.detail === "string" ? raw.detail : null;
           if (!res.ok) {
@@ -401,7 +543,7 @@ export default function ReelHouseApp() {
         }
       })();
     },
-    [boot.phase, publicUrl]
+    [boot.phase, publicUrl, profileSlug]
   );
 
   const closeDetail = useCallback(() => {
@@ -430,26 +572,39 @@ export default function ReelHouseApp() {
 
   // Focus registration: one flat spot set per layout, rebuilt when the
   // layout changes. Bands mirror the visual rows exactly (top bar, hero,
-  // rail heading + cards, search grid rows, modal actions).
+  // rail heading + cards [+ reveal chips], search grid rows [+ chips],
+  // modal actions). Reveal chips share their row's band, slotted after the
+  // row's cards, so arrows reach every shield control.
   const spots = useMemo<FocusSpot[]>(() => {
     if (detail) {
       const modalSpots: FocusSpot[] = [{ id: "modal-close", band: 0, slot: 0 }];
       if (detail.phase === "ready" && detail.view.playHref) modalSpots.push({ id: "modal-play", band: 0, slot: 1 });
+      if (detail.phase === "ready" && shieldFor(detail.card).protectedItem) {
+        modalSpots.push({ id: "modal-reveal", band: 0, slot: 2 });
+      }
       if (detail.phase === "error") modalSpots.push({ id: "modal-retry", band: 0, slot: 1 });
       return modalSpots;
     }
     const navSpots: FocusSpot[] = NAV_PRESETS.map((preset, index) => ({ id: `nav-${preset.id}`, band: 0, slot: index }));
     navSpots.push({ id: "nav-search", band: 0, slot: NAV_PRESETS.length });
+    navSpots.push({ id: "shield-toggle", band: 0, slot: NAV_PRESETS.length + 1 });
     if (mode === "search") {
       const searchSpots: FocusSpot[] = [...navSpots, { id: "search-input", band: 1, slot: 0 }];
       if (filters.library || filters.types.length) searchSpots.push({ id: "filter-clear", band: 1, slot: 1 });
       if (results) {
-        results.cards.forEach((_, index) => {
+        results.cards.forEach((card, index) => {
           searchSpots.push({
             id: `result:${index}`,
             band: 2 + Math.floor(index / columns),
             slot: index % columns
           });
+          if (shieldFor(card).protectedItem) {
+            searchSpots.push({
+              id: `result-reveal:${index}`,
+              band: 2 + Math.floor(index / columns),
+              slot: columns + (index % columns)
+            });
+          }
         });
         if (results.hasMore) {
           searchSpots.push({ id: "load-more", band: 2 + Math.ceil(results.cards.length / columns), slot: 0 });
@@ -468,18 +623,24 @@ export default function ReelHouseApp() {
         // Jellyfin deep link when configured, a detail-opening demo button
         // otherwise.
         homeSpots.push({ id: "hero-play", band, slot: 0 }, { id: "hero-info", band, slot: 1 });
+        if (shieldFor(hero).protectedItem) homeSpots.push({ id: "hero-reveal", band, slot: 2 });
         band += 1;
       }
       for (const rail of rails) {
         homeSpots.push({ id: `${rail.slug}:seeall`, band, slot: 0 });
         band += 1;
-        rail.cards.forEach((_, index) => homeSpots.push({ id: `${rail.slug}:card:${index}`, band, slot: index }));
+        rail.cards.forEach((card, index) => {
+          homeSpots.push({ id: `${rail.slug}:card:${index}`, band, slot: index });
+          if (shieldFor(card).protectedItem) {
+            homeSpots.push({ id: `${rail.slug}:reveal:${index}`, band, slot: columns + index });
+          }
+        });
         band += 1;
       }
     }
     if (boot.phase === "error") homeSpots.push({ id: "boot-retry", band: 1, slot: 0 });
     return homeSpots;
-  }, [detail, mode, filters.library, filters.types, results, searchState, columns, boot, hero, rails]);
+  }, [detail, mode, filters.library, filters.types, results, searchState, columns, boot, hero, rails, shieldFor]);
 
   const focusMap = useMemo(() => buildFocusMap(spots), [spots]);
 
@@ -585,7 +746,9 @@ export default function ReelHouseApp() {
     return "";
   })();
 
-  const heroStyle = hero?.backdropUrl ? { backgroundImage: `url(${hero.backdropUrl})` } : undefined;
+  const heroShield = hero ? shieldFor(hero) : null;
+  const heroStyle =
+    hero?.backdropUrl && !heroShield?.masked ? { backgroundImage: `url(${hero.backdropUrl})` } : undefined;
   const isLoading = boot.phase === "boot" || boot.phase === "loading";
 
   return (
@@ -620,6 +783,19 @@ export default function ReelHouseApp() {
               onClick={() => (mode === "search" ? setFocus("search-input") : openSearch({ q: "", types: [], library: null }))}
             >
               <SearchIcon />
+            </button>
+            <button
+              className={spoilerShield === "shield" ? "shield-toggle on" : "shield-toggle"}
+              data-focus-id="shield-toggle"
+              tabIndex={focusId === "shield-toggle" ? 0 : -1}
+              aria-pressed={spoilerShield === "shield"}
+              aria-label={`Spoiler shield for ${profileKey}: ${spoilerShield === "shield" ? "on" : "off"}`}
+              title={`Spoiler shield for ${profileKey} — hides synopses and previews for unwatched titles`}
+              onFocus={() => setFocus("shield-toggle")}
+              onClick={toggleSpoilerShield}
+            >
+              <ShieldIcon />
+              <span className="shield-label">Shield {spoilerShield === "shield" ? "on" : "off"}</span>
             </button>
             <div className="profile-pill" aria-label={activeProfile ? `Profile ${activeProfile.display_name}` : "No profile loaded"}>
               {activeProfile ? (
@@ -707,6 +883,11 @@ export default function ReelHouseApp() {
                       isFocused={focusId === `result:${index}`}
                       onCardFocus={setFocus}
                       onOpen={openDetail}
+                      shield={shieldFor(card)}
+                      chipFocusId={`result-reveal:${index}`}
+                      chipFocused={focusId === `result-reveal:${index}`}
+                      onChipFocus={setFocus}
+                      onToggleReveal={toggleReveal}
                     />
                   ))}
                 </div>
@@ -767,7 +948,9 @@ export default function ReelHouseApp() {
               <div className="hero-content page-gutter">
                 {hero ? (
                   <>
-                    <p className="eyebrow">{hero.subtitle || "Featured in your library"}</p>
+                    <p className="eyebrow">
+                      {heroShield?.masked ? "Featured in your library" : hero.subtitle || "Featured in your library"}
+                    </p>
                     <h1>{hero.title}</h1>
                     <p className="hero-meta">
                       {hero.year ?? ""} {hero.rating ? `• ★ ${hero.rating.toFixed(1)}` : ""}
@@ -805,6 +988,19 @@ export default function ReelHouseApp() {
                       >
                         <InfoIcon /> More info
                       </button>
+                      {heroShield?.protectedItem && (
+                        <button
+                          className="secondary-button"
+                          data-focus-id="hero-reveal"
+                          tabIndex={focusId === "hero-reveal" ? 0 : -1}
+                          aria-pressed={heroShield.revealed}
+                          aria-label={heroShield.revealed ? `Hide synopsis for ${hero.title}` : `Reveal synopsis for ${hero.title}`}
+                          onFocus={() => setFocus("hero-reveal")}
+                          onClick={() => toggleReveal(hero.jellyfinId)}
+                        >
+                          {heroShield.masked ? SPOILER_SHIELD_COPY.revealSynopsis : SPOILER_SHIELD_COPY.hideSynopsis}
+                        </button>
+                      )}
                     </div>
                   </>
                 ) : (
@@ -860,6 +1056,11 @@ export default function ReelHouseApp() {
                         isFocused={focusId === `${rail.slug}:card:${index}`}
                         onCardFocus={setFocus}
                         onOpen={openDetail}
+                        shield={shieldFor(card)}
+                        chipFocusId={`${rail.slug}:reveal:${index}`}
+                        chipFocused={focusId === `${rail.slug}:reveal:${index}`}
+                        onChipFocus={setFocus}
+                        onToggleReveal={toggleReveal}
                       />
                     ))}
                   </div>
@@ -883,8 +1084,13 @@ export default function ReelHouseApp() {
               <div
                 className="details-backdrop"
                 style={
+                  !shieldFor(detail.card).masked &&
                   (detail.phase === "ready" ? detail.view.backdropUrl : detail.card.backdropUrl)
-                    ? { backgroundImage: `url(${detail.phase === "ready" ? detail.view.backdropUrl : detail.card.backdropUrl})` }
+                    ? {
+                        backgroundImage: `url(${
+                          detail.phase === "ready" ? detail.view.backdropUrl : detail.card.backdropUrl
+                        })`
+                      }
                     : undefined
                 }
               />
@@ -948,7 +1154,11 @@ export default function ReelHouseApp() {
                     {detail.view.libraryName && <span>{detail.view.libraryName}</span>}
                     {detail.view.fileSummary && <span>{detail.view.fileSummary}</span>}
                   </div>
-                  <p>{detail.view.overview || "No overview recorded for this title yet."}</p>
+                  {shieldFor(detail.card).masked ? (
+                    <p className="spoiler-masked-text">{SPOILER_SHIELD_COPY.maskedSynopsis}</p>
+                  ) : (
+                    <p>{detail.view.overview || "No overview recorded for this title yet."}</p>
+                  )}
                   {detail.view.people.length > 0 && (
                     <p className="detail-people">
                       <strong>People:</strong> {detail.view.people.slice(0, 6).join(" · ")}
@@ -970,6 +1180,25 @@ export default function ReelHouseApp() {
                     ) : (
                       <button className="primary-button" disabled>
                         <PlayIcon /> Demo item
+                      </button>
+                    )}
+                    {shieldFor(detail.card).protectedItem && (
+                      <button
+                        className="secondary-button"
+                        data-focus-id="modal-reveal"
+                        tabIndex={focusId === "modal-reveal" ? 0 : -1}
+                        aria-pressed={shieldFor(detail.card).revealed}
+                        aria-label={
+                          shieldFor(detail.card).revealed
+                            ? `Hide spoilers for ${detail.view.title}`
+                            : `Reveal spoilers for ${detail.view.title}`
+                        }
+                        onFocus={() => setFocus("modal-reveal")}
+                        onClick={() => toggleReveal(detail.card.jellyfinId)}
+                      >
+                        {shieldFor(detail.card).masked
+                          ? SPOILER_SHIELD_COPY.revealSpoilers
+                          : SPOILER_SHIELD_COPY.hideSpoilers}
                       </button>
                     )}
                     <button className="secondary-button" onClick={closeDetail}>Close</button>
