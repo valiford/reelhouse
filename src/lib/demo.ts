@@ -13,6 +13,20 @@ const posters = [
   ["Deep Blue", "A quiet documentary from below the surface.", "Documentary", 2022]
 ] as const;
 
+/**
+ * Read-only watch states for the demo fixtures, mirroring the Jellyfin
+ * UserData.Played contract. Continue-watching items are in progress and
+ * therefore never marked watched: playback progress alone is not watched.
+ */
+const watchStates: Array<boolean | undefined> = [
+  false, false, false, false,
+  false, true, false, true,
+  false, true, undefined, true,
+  false, true, undefined, false,
+  true, false, undefined, true,
+  false, true
+];
+
 function item(index: number): MediaItem {
   const [title, overview, genre, year] = posters[index % posters.length];
   const seed = encodeURIComponent(`${title}-${index}`);
@@ -25,6 +39,7 @@ function item(index: number): MediaItem {
     rating: 7.2 + (index % 20) / 10,
     genres: [genre],
     progress: index < 4 ? [63, 28, 82, 41][index] : undefined,
+    watched: watchStates[index % watchStates.length],
     imageUrl: `https://picsum.photos/seed/${seed}/600/900`,
     backdropUrl: `https://picsum.photos/seed/${seed}-backdrop/1600/900`
   };

@@ -14,7 +14,7 @@ Origin/main is the authoritative control plane. Branch/worktree existence is lea
 
 | Priority | Job ID | Status | Agent | Description |
 |---:|---|---|---|---|
-| 1 | RH-0044 | READY | ZCODE | [Household catalog and spoiler final review carrier](jobs/RH-0044-household-catalog-and-spoiler-final-review-carrier.md) |
+| 1 | RH-0044 | REVIEW | ZCODE | [Household catalog and spoiler final review carrier](jobs/RH-0044-household-catalog-and-spoiler-final-review-carrier.md) |
 | 2 | RH-0041 | REVIEW | ZCODE | [Household and media delivery convergence](jobs/RH-0041-household-and-media-delivery-convergence.md) |
 | 3 | RH-0042 | REVIEW | ZCODE | [Unwatched-content spoiler shield](jobs/RH-0042-unwatched-content-spoiler-shield.md) |
 | 4 | RH-0043 | PROPOSED | ZCODE | [Household profile switch and cached-state isolation](jobs/RH-0043-household-profile-switch-and-cached-state-isolation.md) — explicit dependency/controller gate remains |
