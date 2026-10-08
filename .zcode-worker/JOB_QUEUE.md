@@ -2,9 +2,35 @@
 
 Origin/main is the authoritative control plane. Branch/worktree existence is lease authority. Only the newest table supplies candidate work.
 
-## Owner Execution Wave — 2026-10-05 reconciliation and reload
+## Owner acceptance — 2026-10-08 reconciliation and reload
 
-> **Authoritative selection table.** This owner-authorized reconciliation supersedes every earlier execution/READY table. Claim only READY rows here with eligible full specs, satisfied dependencies and no local/remote lease. Historical tables are nonclaimable lineage; never fall back to historical READY labels.
+> **Authoritative selection table.** This owner-authorized acceptance supersedes every earlier execution/READY table. Claim only READY rows here with eligible full specs, satisfied dependencies and no local/remote lease. Historical tables are nonclaimable lineage; never fall back to historical READY labels.
+>
+> Owner decision 2026-10-08 (in-session, America/New_York): **RH-0044 accepted and merged to main** at `59127ce` (merge `--no-ff` of carrier `eb1e6b5` onto `c465a70`; product tree byte-identical to the tested head `e95d958`). RH-0041 and RH-0042 are incorporated inside that acceptance — no separate merge. The four held twins **RH-0025 / RH-0028 / RH-0029 / RH-0004 are CLOSED as covered** by the carrier; no residual work ordered. **RH-0043's dependency is satisfied and the owner approves it READY** as the next claimable job. All other CLAIMED leases remain intact and unchanged; their disposition is a future owner action.
+>
+> **1 READY candidate**, subject to claim-time checks (11:00–21:00 America/New_York). Numeric reserve is conditional on useful work: do not invent filler or bypass dependency gates. Refresh main after each handoff and seek controller reconciliation after three additional REVIEW deliveries.
+>
+> Full worker prompt: [worker-2026-10-08.md](prompts/worker-2026-10-08.md) · Evidence: [acceptance-2026-10-08.md](reports/acceptance-2026-10-08.md).
+
+| Priority | Job ID | Status | Agent | Description |
+|---:|---|---|---|---|
+| 1 | RH-0043 | READY | ZCODE | [Household profile switch and cached-state isolation](jobs/RH-0043-household-profile-switch-and-cached-state-isolation.md) — owner-approved 2026-10-08; dependency satisfied by RH-0044 acceptance |
+
+### Delivery and ownership ledger — 2026-10-08 acceptance
+
+| Job ID | Previous state | Reconciled state | Evidence |
+|---|---|---|---|
+| RH-0044 | REVIEW | COMPLETE | Owner accepted; merged to main `59127ce` (carrier `eb1e6b5`; verification per RH-0044 report: 209 hermetic / 75 integration / 43 real-browser checks) |
+| RH-0041 | REVIEW | COMPLETE | Incorporated via RH-0044 carrier (merge `a42ad26` of frozen `5fe1981`); no separate merge |
+| RH-0042 | REVIEW | COMPLETE | Incorporated via RH-0044 carrier (merge `bb1b2f3` of frozen `90fdb17`; 3 conflicts resolved and documented); no separate merge |
+| RH-0025 | BLOCKED | CLOSED | Owner twin disposition: schema/migrations + household-state constraints delivered inside RH-0044 (migrations 0001–0010 incl. 0006 checks/uniques/tombstones); no residual work ordered |
+| RH-0028 | BLOCKED | CLOSED | Owner twin disposition: backup/restore/rebuild + DR delivered inside RH-0044 (migration 0010, `scripts/dr*.ts`, `dr.int.test.ts`); no residual work ordered |
+| RH-0029 | BLOCKED | CLOSED | Owner twin disposition: TV search/discovery/recommendation read models delivered inside RH-0044 (`browse`/`params`/`recommendations`, `/api/catalog/*`); no residual work ordered |
+| RH-0004 | BLOCKED | CLOSED | Owner twin disposition: Jellyfin→media_catalog sync delivered inside RH-0044 (sync engine + change history + quarantine + stable identity/provenance/freshness); no residual work ordered |
+
+## Superseded execution wave — 2026-10-05 reconciliation and reload
+
+> **Superseded selection table; nonclaimable lineage.** Superseded by the 2026-10-08 owner acceptance above; this table no longer authorizes selection and historical READY labels are lineage only.
 >
 > Audited origin/main: `b8d068fd6763e60e7bc628327022f03062a6e96f`. Timestamp: 2026-10-05T22:55:05Z. Remote GitHub branches, PRs, reports and accepted-main ancestry were inspected. Local Windows worktrees/processes and production state were not observed; recheck ownership at claim time. Existing REVIEW/CLAIMED/RUNNING/ACTIVE leases remain intact. Source carriers do not acquire source leases.
 >
@@ -201,6 +227,9 @@ _None._
 | Job ID | Status | Integration |
 |---|---|---|
 | RH-0001 | COMPLETE | Imported Synology ReelHouse source baseline accepted and squash-merged through PR #1 at `605ee8f`; baseline inventory, deployment mapping, data authorities, and PostgreSQL 18 migration surface are now on `main` |
+| RH-0044 | COMPLETE | Owner-accepted 2026-10-08; household-catalog and spoiler final review carrier merged to `main` at `59127ce` (136 files, +26,556/−136; includes RH-0041 + RH-0042 + per-profile watch-state plumbing and all delivery reports/screens) |
+| RH-0041 | COMPLETE | Incorporated inside the RH-0044 acceptance (frozen `5fe1981`, merged clean) |
+| RH-0042 | COMPLETE | Incorporated inside the RH-0044 acceptance (frozen `90fdb17`, 3 conflicts resolved and documented) |
 
 ## Queue Rules
 

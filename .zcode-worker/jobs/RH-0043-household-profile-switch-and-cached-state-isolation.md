@@ -1,12 +1,12 @@
 # RH-0043 — Household profile switch and cached-state isolation
 
-STATUS: PROPOSED
+STATUS: READY
 AGENT: ZCODE
 AUTOMATION_ELIGIBLE: true
 BASE: origin/main
-PRIORITY: 4
-WAVE: 2026-10-05 (reconciled; original assignment 2026-10-04)
-DEPENDENCIES: RH-0041 accepted onto origin/main
+PRIORITY: 1
+WAVE: 2026-10-08 (owner-approved; original assignment 2026-10-04, reconciled 2026-10-05)
+DEPENDENCIES: SATISFIED 2026-10-08 — RH-0041 incorporated via the RH-0044 carrier accepted onto origin/main (acceptance merge `59127ce`)
 AUDITED_MAIN: b8d068fd6763e60e7bc628327022f03062a6e96f
 
 ## Objective and user-visible outcome
@@ -27,6 +27,8 @@ Deliver the complete bounded outcome, including its usable interface or runnable
 ## Dependency and ownership gate
 
 Do not claim this job until RH-0041 accepted onto origin/main. Confirm the prerequisite's accepted behavior and required files on then-current origin/main. A REVIEW branch or green PR is not accepted integration. This job is intentionally dependency-gated; do not promote it just to maintain reserve depth.
+
+**Owner update 2026-10-08:** the gate is satisfied — RH-0041 was incorporated into the RH-0044 carrier, which the owner accepted onto origin/main at merge `59127ce` — and the owner approved this job READY. Claim per the newest authoritative table in `.zcode-worker/JOB_QUEUE.md` (11:00–21:00 America/New_York) with the usual lease checks.
 
 Remote audit cannot see local Windows leases or processes. Recheck ownership immediately before claim. One active claim per job, one job per worker at a time. New claims honor the repository's Eastern-time window; where the existing protocol has no time restriction, do not invent one.
 
