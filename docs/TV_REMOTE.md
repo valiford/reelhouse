@@ -61,6 +61,39 @@ view with `block/inline: nearest`.
 - **Detail 404** ("no longer in your catalog") is rendered as a real state —
   catalog churn removes items between feed render and detail fetch.
 
+## Profile session isolation (RH-0043)
+
+The household profile is a **URL identity** (`?profile=<slug>`) that the UI
+tracks live — Next's router syncs `useSearchParams` with history navigation
+and native `history.pushState`/`replaceState`, so an in-session switch (and
+any future profile menu) is honored instead of silently serving the previous
+profile under the new URL. The slug is the contractual identity
+(`docs/HOUSEHOLD.md`); display names are copy, never cache keys.
+
+- **Identity-bound requests:** every profile-scoped call (home feed, catalog
+  search pages, item detail) carries the exact session slug. Constructed at
+  one choke point (`buildCatalogSearchUrl` / `profileQueryParam`), so no code
+  path can issue an unscoped request while a profile is asserted.
+- **Switch = bounded session cleanup:** an identity change invalidates the
+  session generation, aborts the requests that outlive a render pass (detail
+  modal, Load more), and drops every profile-scoped cached view — feed,
+  search results and filters, detail modal, reveal set, focus. The UI
+  restarts from the boot path for the new identity.
+- **Generation-bound responses:** async work captures the generation token
+  at start and is dropped when stale (`src/lib/session/profile-session.ts`).
+  A late response computed for one profile can never overwrite or re-open
+  another title's modal, and a stale profile's feed can never land after a
+  switch. The boot and search effects additionally abort their own fetches
+  per run.
+- **Persisted preferences are slug-keyed:** the spoiler-shield preference
+  lives under the resolved profile slug ("demo" in demo mode, the feed's
+  slug for the unscoped default view). Entries written by earlier
+  deliveries under a display name migrate onto the slug once the feed
+  resolves the identity, and the legacy key is removed
+  (`migrateProfileSpoilerShieldPreference`). An unparsable slug passes
+  through untouched so the server's 404/400 stays the fail-closed authority
+  — the client never falls back to another profile.
+
 ## Accessibility
 
 - Every focusable element shows the gold focus ring whenever focused, at

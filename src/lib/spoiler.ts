@@ -66,6 +66,40 @@ export function writeProfileSpoilerShieldPreference(
 }
 
 /**
+ * One-time identity migration (RH-0043): earlier deliveries keyed stored
+ * preferences by display name, but the contractual profile identity is the
+ * slug (renames never rewrite rows — docs/HOUSEHOLD.md). Once the feed
+ * resolves both, the slug's entry is adopted from the display-name entry
+ * when it has none of its own, and the legacy display-name key is removed
+ * so display names stop being cache keys and the store stays bounded.
+ * Returns true only when the stored payload actually changed.
+ */
+export function migrateProfileSpoilerShieldPreference(
+  store: SpoilerShieldStore | null | undefined,
+  slug: string,
+  legacyDisplayName: string
+): boolean {
+  if (!store || !slug || !legacyDisplayName || slug === legacyDisplayName) return false;
+  try {
+    const stored = parseProfileSpoilerShieldPreferences(store.getItem(SPOILER_SHIELD_STORAGE_KEY));
+    const legacy = stored[legacyDisplayName];
+    if (legacy === undefined) return false;
+    let changed = false;
+    if (stored[slug] === undefined) {
+      stored[slug] = legacy;
+      changed = true;
+    }
+    delete stored[legacyDisplayName];
+    store.setItem(SPOILER_SHIELD_STORAGE_KEY, JSON.stringify(stored));
+    return changed;
+  } catch {
+    // Storage can be unavailable (private mode, quota); the conservative
+    // default still applies and the legacy entry simply stays put.
+    return false;
+  }
+}
+
+/**
  * Shielding requires the explicit watch-state contract: only Jellyfin's
  * UserData.Played marks an item watched, playback progress alone never does,
  * and an unknown watch state stays protected.

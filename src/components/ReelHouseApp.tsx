@@ -1,17 +1,20 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useSearchParams } from "next/navigation";
 import type { MediaItem } from "@/lib/types";
 import { demoLibrary } from "@/lib/demo";
 import {
   DEFAULT_SPOILER_SHIELD_PREFERENCE,
   SPOILER_SHIELD_COPY,
   isSpoilerShielded,
+  migrateProfileSpoilerShieldPreference,
   readProfileSpoilerShieldPreference,
   writeProfileSpoilerShieldPreference,
   type SpoilerShieldPreference,
   type SpoilerShieldStore
 } from "@/lib/spoiler";
+import { createGenerationGuard, normalizeProfileSlug, profileQueryParam } from "@/lib/session/profile-session";
 import { buildFocusMap, firstFocusable, moveFocus, type Direction, type FocusSpot } from "@/lib/tv/navigation";
 import {
   cardFromCatalog,
@@ -42,6 +45,15 @@ import { HomeIcon, InfoIcon, PlayIcon, SearchIcon, ShieldIcon } from "./icons";
 // unwatched and unknown-state titles render masked — poster, backdrop and
 // synopsis suppressed — until an explicit identity-keyed Reveal, and the
 // revealed set never crosses profiles. Progress alone never implies watched.
+//
+// Profile session isolation (RH-0043): the household profile is a URL
+// identity (?profile=<slug>), tracked live so an in-session switch —
+// history navigation, pushState, a future profile menu — is honored instead
+// of silently serving the previous profile under the new URL. A switch is a
+// new session for every profile-scoped slice: in-flight work is aborted and
+// generation-invalidated, cached views (feed, search results, detail modal,
+// reveals) are dropped, and persisted preferences stay keyed by the
+// contractual slug, never the mutable display name.
 
 type Boot =
   | { phase: "boot" }
@@ -78,6 +90,21 @@ interface SearchResults {
 }
 
 const SEARCH_PAGE_SIZE = 24;
+
+// One identity-bound construction point for catalog search requests: the
+// asserted session identity rides along on every page, so no code path —
+// first page or Load more — can issue an unscoped search while a profile
+// is active.
+function buildCatalogSearchUrl(filters: SearchFilters, profileSlug: string | null, offset: number): string {
+  const params = new URLSearchParams();
+  if (filters.q.trim()) params.set("q", filters.q.trim());
+  for (const type of filters.types) params.append("types", type);
+  if (filters.library) params.set("libraries", filters.library);
+  if (profileSlug) params.set("profile", profileSlug);
+  params.set("limit", String(SEARCH_PAGE_SIZE));
+  if (offset > 0) params.set("offset", String(offset));
+  return `/api/catalog/search?${params.toString()}`;
+}
 
 // The catalog normalizes Jellyfin "Video" items to "movie", so the type axis
 // cannot express a "Home Videos" slice; home-video libraries surface through
@@ -281,9 +308,12 @@ function Card({
 }
 
 export default function ReelHouseApp() {
-  const [profileSlug] = useState(() =>
-    typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("profile")
-  );
+  // The asserted profile identity is read live from the URL: Next's router
+  // syncs useSearchParams with history navigation and native pushState/
+  // replaceState, so an in-session switch reaches the app instead of being
+  // frozen at mount (RH-0043).
+  const searchParams = useSearchParams();
+  const profileSlug = normalizeProfileSlug(searchParams.get("profile"));
   const [boot, setBoot] = useState<Boot>({ phase: "boot" });
   const [status, setStatus] = useState<CatalogStatusPayload | null>(null);
   const [jellyfin, setJellyfin] = useState<JellyfinHealthPayload | null>(null);
@@ -298,27 +328,71 @@ export default function ReelHouseApp() {
   const [detail, setDetail] = useState<Detail | null>(null);
   const openerRef = useRef<string | null>(null);
 
+  // Session isolation (RH-0043): one generation for the whole mounted
+  // session's async work, invalidated on every profile identity change and
+  // on unmount; per-request abort controllers for the requests that outlive
+  // a render pass (detail modal, Load more).
+  const profileGenRef = useRef(createGenerationGuard());
+  const detailAbortRef = useRef<AbortController | null>(null);
+  const loadMoreAbortRef = useRef<AbortController | null>(null);
+  const loadMoreInFlightRef = useRef(false);
+  const detailRequestRef = useRef(0);
+
   const [focusId, setFocusId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const columns = useColumns();
 
   const publicUrl = useMemo(() => publicJellyfinUrl(), []);
 
-  const homeUrl = useMemo(
-    () => `/api/home${profileSlug ? `?profile=${encodeURIComponent(profileSlug)}` : ""}`,
-    [profileSlug]
+  const homeUrl = useMemo(() => `/api/home${profileQueryParam(profileSlug)}`, [profileSlug]);
+
+  // Bounded session cleanup on an identity switch (RH-0043): in-flight work
+  // is invalidated and aborted, and every profile-scoped cached view is
+  // dropped, so nothing scoped to the previous identity can survive to
+  // render in the new one. The boot effect below restarts the feed because
+  // homeUrl changed; the reveal reset keeps its own render-phase guard.
+  const lastIdentityRef = useRef(profileSlug);
+  useEffect(() => {
+    if (lastIdentityRef.current === profileSlug) return;
+    lastIdentityRef.current = profileSlug;
+    profileGenRef.current.invalidate();
+    detailAbortRef.current?.abort();
+    detailAbortRef.current = null;
+    loadMoreAbortRef.current?.abort();
+    loadMoreAbortRef.current = null;
+    loadMoreInFlightRef.current = false;
+    setMode("home");
+    setFilters({ q: "", types: [], library: null });
+    setResults(null);
+    setSearchState("idle");
+    setDetail(null);
+    openerRef.current = null;
+    setFocusId(null);
+  }, [profileSlug]);
+
+  // Unmount ends the session: nothing in flight may outlive it.
+  useEffect(
+    () => () => {
+      profileGenRef.current.invalidate();
+      detailAbortRef.current?.abort();
+      loadMoreAbortRef.current?.abort();
+    },
+    []
   );
 
   // Boot: health routes the UI between demo mode and the PG-backed feed.
+  // The fetches are bound to this effect run's AbortController: a re-boot
+  // (identity switch, retry) aborts the previous run's network work, and a
+  // response from an aborted generation never lands in state (RH-0043).
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
     (async () => {
       setBoot({ phase: "boot" });
       setStatus(null);
       try {
-        const healthRes = await fetch("/api/health");
+        const healthRes = await fetch("/api/health", { signal: controller.signal });
         const health = await healthRes.json();
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         setJellyfin(health?.jellyfin ?? null);
         if (health?.database?.state === "unconfigured") {
           setBoot({ phase: "demo" });
@@ -327,10 +401,10 @@ export default function ReelHouseApp() {
         }
         setBoot({ phase: "loading" });
         const [homeRes, statusRes] = await Promise.all([
-          fetch(homeUrl),
-          fetch("/api/catalog/status").catch(() => null)
+          fetch(homeUrl, { signal: controller.signal }),
+          fetch("/api/catalog/status", { signal: controller.signal }).catch(() => null)
         ]);
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         if (statusRes?.ok) setStatus(await statusRes.json());
         const body = await homeRes.json().catch(() => null);
         if (homeRes.status === 404) {
@@ -346,11 +420,13 @@ export default function ReelHouseApp() {
         // effect no-ops safely when an empty feed renders no such spot.
         setFocusId("hero-play");
       } catch {
-        if (!cancelled) setBoot({ phase: "error", kind: "database", detail: "ReelHouse could not reach the server." });
+        if (!controller.signal.aborted) {
+          setBoot({ phase: "error", kind: "database", detail: "ReelHouse could not reach the server." });
+        }
       }
     })();
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [homeUrl, retryTick]);
 
@@ -373,11 +449,32 @@ export default function ReelHouseApp() {
     [boot]
   );
 
-  // The spoiler preference is keyed by the resolved household identity: the
-  // feed's profile display name once loaded, the URL slug before that, and
-  // "demo" in demo mode (which has no household). Until an identity exists
-  // the preference reads conservative-by-default.
-  const profileKey = activeProfile?.display_name ?? (profileSlug ?? "demo");
+  // The spoiler preference is keyed by the contractual household identity:
+  // the feed's resolved profile slug once loaded, the URL slug before that,
+  // and "demo" in demo mode (which has no household). Display names are
+  // copy, never cache keys — they can be renamed without rewriting rows
+  // (docs/HOUSEHOLD.md). Until an identity exists the preference reads
+  // conservative-by-default.
+  const profileKey = boot.phase === "ready" && boot.feed.profile ? boot.feed.profile.slug : (profileSlug ?? "demo");
+  // Human-facing copy stays the display name; identity and label are kept
+  // deliberately apart.
+  const profileLabel = activeProfile?.display_name ?? (profileSlug ?? "demo");
+
+  // Identity migration (RH-0043): preferences stored under a display name
+  // by earlier deliveries move onto the slug once the feed resolves the
+  // identity, and the legacy key is removed. The shield read below
+  // re-snapshots when the store reports the change.
+  useEffect(() => {
+    if (boot.phase !== "ready" || !boot.feed.profile) return;
+    const migrated = migrateProfileSpoilerShieldPreference(
+      spoilerStore(),
+      boot.feed.profile.slug,
+      boot.feed.profile.display_name
+    );
+    if (migrated) {
+      for (const listener of shieldListeners) listener();
+    }
+  }, [boot]);
 
   // Reveals are ephemeral session state and never cross profiles: when the
   // resolved profile identity changes, the set resets during render — before
@@ -461,13 +558,7 @@ export default function ReelHouseApp() {
           setSearchState(cards.length ? "ready" : "empty");
           return;
         }
-        const params = new URLSearchParams();
-        if (filters.q.trim()) params.set("q", filters.q.trim());
-        for (const type of filters.types) params.append("types", type);
-        if (filters.library) params.set("libraries", filters.library);
-        if (profileSlug) params.set("profile", profileSlug);
-        params.set("limit", String(SEARCH_PAGE_SIZE));
-        const res = await fetch(`/api/catalog/search?${params.toString()}`, { signal: controller.signal });
+        const res = await fetch(buildCatalogSearchUrl(filters, profileSlug, 0), { signal: controller.signal });
         const body = await res.json().catch(() => null);
         if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
         const page = body.page as { items: Parameters<typeof cardFromCatalog>[0][]; total: number; limit: number; offset: number; hasMore: boolean };
@@ -484,50 +575,77 @@ export default function ReelHouseApp() {
     };
   }, [mode, boot.phase, filters, searchTick, publicUrl, profileSlug]);
 
+  // Load more is generation-bound (RH-0043): one request in flight at a
+  // time, the session identity captured at start, and the page appended
+  // only if the identity is unchanged AND the exact result set it extended
+  // is still current — a switch or a new search must never be spliced into.
   async function loadMore() {
-    if (boot.phase !== "ready" || !results?.hasMore) return;
-    const offset = results.offset + results.limit;
-    const params = new URLSearchParams();
-    if (filters.q.trim()) params.set("q", filters.q.trim());
-    for (const type of filters.types) params.append("types", type);
-    if (filters.library) params.set("libraries", filters.library);
-    if (profileSlug) params.set("profile", profileSlug);
-    params.set("limit", String(SEARCH_PAGE_SIZE));
-    params.set("offset", String(offset));
+    if (boot.phase !== "ready" || !results?.hasMore || loadMoreInFlightRef.current) return;
+    const generation = profileGenRef.current.start();
+    const controller = new AbortController();
+    loadMoreAbortRef.current = controller;
+    loadMoreInFlightRef.current = true;
+    const base = results;
+    const offset = base.offset + base.limit;
     try {
-      const res = await fetch(`/api/catalog/search?${params.toString()}`);
+      const res = await fetch(buildCatalogSearchUrl(filters, profileSlug, offset), { signal: controller.signal });
       const body = await res.json().catch(() => null);
+      if (!profileGenRef.current.isLive(generation)) return;
       if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
       const page = body.page as { items: Parameters<typeof cardFromCatalog>[0][]; total: number; limit: number; offset: number; hasMore: boolean };
       const cards = page.items.map((row) => cardFromCatalog(row, "search", publicUrl));
-      setResults({
-        cards: [...results.cards, ...cards],
-        total: page.total,
-        limit: page.limit,
-        offset,
-        hasMore: page.hasMore
-      });
+      setResults((current) =>
+        current && current.cards === base.cards && current.offset === base.offset
+          ? {
+              cards: [...current.cards, ...cards],
+              total: page.total,
+              limit: page.limit,
+              offset,
+              hasMore: page.hasMore
+            }
+          : current
+      );
       setSearchState("ready");
     } catch {
-      setSearchState("error");
+      if (!controller.signal.aborted && profileGenRef.current.isLive(generation)) setSearchState("error");
+    } finally {
+      loadMoreInFlightRef.current = false;
+      if (loadMoreAbortRef.current === controller) loadMoreAbortRef.current = null;
     }
   }
 
   // Detail modal over /api/catalog/items/:id (demo cards resolve locally).
+  // Every open is a bound request (RH-0043): a request token invalidates
+  // the previous open (close, or opening another title), the abort
+  // controller cancels its network work, and the session generation guards
+  // against a response computed under a profile identity that has since
+  // switched — a late reply can never overwrite, or re-open, another
+  // title's modal.
   const openDetail = useCallback(
     (card: UiCard, opener: string) => {
       openerRef.current = opener;
       setFocusId("modal-close");
+      detailRequestRef.current += 1;
+      const request = detailRequestRef.current;
+      const generation = profileGenRef.current.start();
       if (boot.phase === "demo" || card.jellyfinId.startsWith("demo-")) {
+        detailAbortRef.current?.abort();
+        detailAbortRef.current = null;
         setDetail({ phase: "ready", card, view: detailFromCard(card) });
         return;
       }
+      detailAbortRef.current?.abort();
+      const controller = new AbortController();
+      detailAbortRef.current = controller;
       setDetail({ phase: "loading", card });
       (async () => {
         try {
-          const detailQuery = profileSlug ? `?profile=${encodeURIComponent(profileSlug)}` : "";
-          const res = await fetch(`/api/catalog/items/${encodeURIComponent(card.jellyfinId)}${detailQuery}`);
+          const res = await fetch(
+            `/api/catalog/items/${encodeURIComponent(card.jellyfinId)}${profileQueryParam(profileSlug)}`,
+            { signal: controller.signal }
+          );
           const raw = (await res.json().catch(() => null)) as { detail?: string } | ItemDetailPayload | null;
+          if (detailRequestRef.current !== request || !profileGenRef.current.isLive(generation)) return;
           const errorDetail = raw && "detail" in raw && typeof raw.detail === "string" ? raw.detail : null;
           if (!res.ok) {
             setDetail(
@@ -539,6 +657,8 @@ export default function ReelHouseApp() {
           }
           setDetail({ phase: "ready", card, view: detailView(raw as ItemDetailPayload, publicUrl) });
         } catch {
+          if (controller.signal.aborted) return;
+          if (detailRequestRef.current !== request || !profileGenRef.current.isLive(generation)) return;
           setDetail({ phase: "error", card, detail: "ReelHouse could not reach the server." });
         }
       })();
@@ -547,6 +667,11 @@ export default function ReelHouseApp() {
   );
 
   const closeDetail = useCallback(() => {
+    // Invalidate first: a response already in flight must never re-open
+    // the modal it was fetched for.
+    detailRequestRef.current += 1;
+    detailAbortRef.current?.abort();
+    detailAbortRef.current = null;
     setDetail(null);
     setFocusId(openerRef.current ?? "nav-home");
     openerRef.current = null;
@@ -789,8 +914,8 @@ export default function ReelHouseApp() {
               data-focus-id="shield-toggle"
               tabIndex={focusId === "shield-toggle" ? 0 : -1}
               aria-pressed={spoilerShield === "shield"}
-              aria-label={`Spoiler shield for ${profileKey}: ${spoilerShield === "shield" ? "on" : "off"}`}
-              title={`Spoiler shield for ${profileKey} — hides synopses and previews for unwatched titles`}
+              aria-label={`Spoiler shield for ${profileLabel}: ${spoilerShield === "shield" ? "on" : "off"}`}
+              title={`Spoiler shield for ${profileLabel} — hides synopses and previews for unwatched titles`}
               onFocus={() => setFocus("shield-toggle")}
               onClick={toggleSpoilerShield}
             >
