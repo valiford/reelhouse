@@ -1,6 +1,6 @@
 # RH-0043 — Household profile switch and cached-state isolation
 
-STATUS: REVIEW (worker-delivered 2026-10-08; report: `.zcode-worker/reports/RH-0043.md` — only the owner accepts and merges)
+STATUS: COMPLETE (owner-accepted 2026-10-09; merged to main at `f7526c4` from REVIEW head `1648eca`; report: `.zcode-worker/reports/RH-0043.md`)
 AGENT: ZCODE
 AUTOMATION_ELIGIBLE: true
 BASE: origin/main

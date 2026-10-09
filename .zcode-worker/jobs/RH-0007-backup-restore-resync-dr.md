@@ -1,6 +1,6 @@
 # RH-0007 — Backup, Restore, Resync, and Disaster Recovery
 
-**STATUS:** WAITING  
+**STATUS:** CLOSED (resolved by owner decision 2026-10-09 — fully covered by the delivered DR family; see `.zcode-worker/reports/acceptance-2026-10-09.md`)  
 **AUTOMATION_ELIGIBLE:** true  
 **DEPENDENCY:** RH-0002 and RH-0004 accepted
 

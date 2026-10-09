@@ -1,6 +1,6 @@
 # RH-0005 — Household State Persistence
 
-**STATUS:** WAITING  
+**STATUS:** CLOSED (resolved by owner decision 2026-10-09 — superseded by the delivered household contract; see `.zcode-worker/reports/acceptance-2026-10-09.md`)  
 **AUTOMATION_ELIGIBLE:** true  
 **DEPENDENCY:** RH-0003 accepted
 

@@ -2,9 +2,33 @@
 
 Origin/main is the authoritative control plane. Branch/worktree existence is lease authority. Only the newest table supplies candidate work.
 
-## Owner acceptance — 2026-10-08 reconciliation and reload
+## Owner acceptance — 2026-10-09 reconciliation and reload
 
 > **Authoritative selection table.** This owner-authorized acceptance supersedes every earlier execution/READY table. Claim only READY rows here with eligible full specs, satisfied dependencies and no local/remote lease. Historical tables are nonclaimable lineage; never fall back to historical READY labels.
+>
+> Owner decision 2026-10-09 (in-session, America/New_York): **RH-0043 accepted and merged to main** at `f7526c4` (merge `--no-ff` of REVIEW head `1648eca` onto `3f78a8e`; product tree byte-identical to the tested head — `git diff 1648eca^{tree} f7526c4^{tree}` empty). **RH-0005 / RH-0006 / RH-0007 are RESOLVED per owner instruction** with evidence-based dispositions in the ledger below; no residual work auto-ordered. The owner ordered a queue reload for work: **RH-0045 and RH-0046 are READY** as the October 9 wave. All other CLAIMED leases remain intact and unchanged; their disposition is a future owner action.
+>
+> **2 READY candidates**, subject to claim-time checks (11:00–21:00 America/New_York). Numeric reserve sits below the six-job target by design: this reload orders only genuinely grounded work — do not invent filler or bypass dependency gates. Refresh main after each handoff and seek controller reconciliation after three additional REVIEW deliveries.
+>
+> Full worker prompt: [worker-2026-10-09.md](prompts/worker-2026-10-09.md) · Evidence: [acceptance-2026-10-09.md](reports/acceptance-2026-10-09.md).
+
+| Priority | Job ID | Status | Agent | Description |
+|---:|---|---|---|---|
+| 1 | RH-0045 | READY | ZCODE | [Next.js security upgrade integration carrier](jobs/RH-0045-nextjs-security-upgrade-integration-carrier.md) — integrates the frozen RH-0008 delivery; clears audit findings at main head |
+| 2 | RH-0046 | READY | ZCODE | [In-app household profile switcher](jobs/RH-0046-in-app-household-profile-switcher.md) — TV-reachable switching over the RH-0043 live-URL identity contract |
+
+### Delivery and ownership ledger — 2026-10-09 acceptance and resolution
+
+| Job ID | Previous state | Reconciled state | Evidence |
+|---|---|---|---|
+| RH-0043 | REVIEW | COMPLETE | Owner accepted; merged to main `f7526c4` (REVIEW head `1648eca`; verification per RH-0043 report: 220 hermetic / 75 integration / 21 real-browser checks / 4 visual screens; accepted tree byte-identical to the tested head) |
+| RH-0005 | WAITING | CLOSED | Superseded by the delivered household contract. State model fully on main (migration `0006_household_state.sql`: profiles, preferences, favorites, watchlists+entries, collections+entries, home rows, watch state, playback history); durable PG-backed writes via idempotent import (`scripts/household-import.ts`, zero-write re-import proven); profile-scoped fail-closed reads through `/api/home` + `/api/catalog/*` (?profile=, unknown slug 404); isolation proven end-to-end (RH-0044 plumbing, RH-0043 session races). The 2025 spec's API *write* surface (profiles/favorites/watchlists/collections CRUD) was never carried into the delivered generation and is not part of the shipped UX; any future household write API is a new owner-ordered job building on the delivered schema. |
+| RH-0006 | WAITING | CLOSED | Covered for the delivered API surface: bounded pool (`src/lib/db/pool.ts`), redacted fail-closed config/errors (`src/lib/db/config.ts`, catalog/readmodel error envelopes), bounded + keyset-paginated reads, `/api/health` database+jellyfin diagnostics with graceful outage and degraded/stale modes, transactional sync/migrate/DR paths, and failure-injection integration suites (75/75 on main: unavailable DB, cancellation probe, rollback/commit/abort, tamper fail-closed, wrong-password redaction). Write-path request idempotency has no subject on main (the shipped API is read-only GET + idempotent operational CLIs); the idempotency machinery from the old chain is NOT on main and must be carried into any future write API. |
+| RH-0007 | WAITING | CLOSED | Fully covered: `src/lib/dr/{artifact,backup,restore,rebuild,status}.ts`, `scripts/dr.ts` + `scripts/dr-verify.ts`, migration `0010_disaster_recovery_ledgers.sql`, `docs/DR.md` + `docs/DISASTER_RECOVERY.md` (RTO/RPO; household-as-durable vs catalog-as-rebuildable), sha256 envelope/manifest verification metadata, disposable dry-run restore rehearsal + 26-table digest `dr:verify`, staleness verdicts (`dr status`), production-never-touched test discipline. Stated dependencies RH-0002 (connectivity/db layer) and RH-0004 (Jellyfin→media_catalog sync) are themselves delivered on main. |
+
+## Superseded execution wave — 2026-10-08 reconciliation and reload
+
+> **Superseded selection table; nonclaimable lineage.** Superseded by the 2026-10-09 owner acceptance above; this table no longer authorizes selection and historical READY labels are lineage only.
 >
 > Owner decision 2026-10-08 (in-session, America/New_York): **RH-0044 accepted and merged to main** at `59127ce` (merge `--no-ff` of carrier `eb1e6b5` onto `c465a70`; product tree byte-identical to the tested head `e95d958`). RH-0041 and RH-0042 are incorporated inside that acceptance — no separate merge. The four held twins **RH-0025 / RH-0028 / RH-0029 / RH-0004 are CLOSED as covered** by the carrier; no residual work ordered. **RH-0043's dependency is satisfied and the owner approves it READY** as the next claimable job. All other CLAIMED leases remain intact and unchanged; their disposition is a future owner action.
 >
@@ -208,11 +232,7 @@ The highest-priority READY job with satisfied dependencies and `AUTOMATION_ELIGI
 
 ## Waiting for dependencies
 
-| Priority | Job ID | Status | Dependency | Description |
-|---:|---|---|---|---|
-| 5 | RH-0005 | WAITING | RH-0003 accepted | Implement household profile, favorite, watchlist, collection, and continue-watching persistence through the ReelHouse API |
-| 6 | RH-0006 | WAITING | RH-0002 + RH-0003 accepted | Harden the ReelHouse API persistence boundary, health checks, connection pooling, transactions, and bounded read/write contracts |
-| 7 | RH-0007 | WAITING | RH-0002 + RH-0004 accepted | Add PostgreSQL backup/restore validation, catalog rebuild/resync, stale-data detection, and disaster-recovery runbook |
+_None._ RH-0005 / RH-0006 / RH-0007 were RESOLVED by owner decision 2026-10-09 (dispositions and evidence in the October 9 ledger above); no jobs are WAITING.
 
 ## Active Jobs
 
@@ -227,6 +247,7 @@ _None._
 | Job ID | Status | Integration |
 |---|---|---|
 | RH-0001 | COMPLETE | Imported Synology ReelHouse source baseline accepted and squash-merged through PR #1 at `605ee8f`; baseline inventory, deployment mapping, data authorities, and PostgreSQL 18 migration surface are now on `main` |
+| RH-0043 | COMPLETE | Owner-accepted 2026-10-09; household profile switch and cached-state isolation merged to `main` at `f7526c4` (14 files, +655/−51: live `?profile=` URL identity, bounded switch cleanup, generation-bound requests, slug-keyed shield storage with display-name migration; report + 4 screens) |
 | RH-0044 | COMPLETE | Owner-accepted 2026-10-08; household-catalog and spoiler final review carrier merged to `main` at `59127ce` (136 files, +26,556/−136; includes RH-0041 + RH-0042 + per-profile watch-state plumbing and all delivery reports/screens) |
 | RH-0041 | COMPLETE | Incorporated inside the RH-0044 acceptance (frozen `5fe1981`, merged clean) |
 | RH-0042 | COMPLETE | Incorporated inside the RH-0044 acceptance (frozen `90fdb17`, 3 conflicts resolved and documented) |

@@ -1,6 +1,6 @@
 # RH-0006 — API Persistence Hardening
 
-**STATUS:** WAITING  
+**STATUS:** CLOSED (resolved by owner decision 2026-10-09 — covered for the delivered read-only API surface; see `.zcode-worker/reports/acceptance-2026-10-09.md`)  
 **AUTOMATION_ELIGIBLE:** true  
 **DEPENDENCY:** RH-0002 and RH-0003 accepted
 
