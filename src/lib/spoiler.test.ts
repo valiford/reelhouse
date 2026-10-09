@@ -4,6 +4,7 @@ import {
   DEFAULT_SPOILER_SHIELD_PREFERENCE,
   SPOILER_SHIELD_STORAGE_KEY,
   isSpoilerShielded,
+  migrateProfileSpoilerShieldPreference,
   normalizeSpoilerShieldPreference,
   parseProfileSpoilerShieldPreferences,
   readProfileSpoilerShieldPreference,
@@ -122,6 +123,70 @@ test("missing or broken storage keeps the conservative default", () => {
     }
   };
   assert.doesNotThrow(() => writeProfileSpoilerShieldPreference(readonlyStore, "Nicole", "show"));
+});
+
+test("display-name-keyed preferences migrate onto the contractual slug (RH-0043)", () => {
+  const key = SPOILER_SHIELD_STORAGE_KEY;
+  const store = memoryStore([[key, JSON.stringify({ "V’Ali": "show" })]]);
+  const migrated = migrateProfileSpoilerShieldPreference(store, "v_ali", "V’Ali");
+  assert.equal(migrated, true);
+  const stored = JSON.parse(store.getItem(key) ?? "{}");
+  assert.deepEqual(
+    stored,
+    { v_ali: "show" },
+    "the preference now lives under the slug and the display-name key is gone"
+  );
+  assert.equal(readProfileSpoilerShieldPreference(store, "v_ali"), "show");
+  assert.equal(readProfileSpoilerShieldPreference(store, "V’Ali"), "shield", "the display name is no longer a cache key");
+});
+
+test("migration never overwrites a slug entry that already exists", () => {
+  const key = SPOILER_SHIELD_STORAGE_KEY;
+  const store = memoryStore([[key, JSON.stringify({ "V’Ali": "show", v_ali: "shield" })]]);
+  const migrated = migrateProfileSpoilerShieldPreference(store, "v_ali", "V’Ali");
+  assert.equal(migrated, false, "the slug already owns its preference — only the legacy key is cleaned up");
+  assert.deepEqual(JSON.parse(store.getItem(key) ?? "{}"), { v_ali: "shield" });
+  assert.equal(readProfileSpoilerShieldPreference(store, "v_ali"), "shield");
+});
+
+test("migration is a no-op without a legacy display-name entry", () => {
+  const key = SPOILER_SHIELD_STORAGE_KEY;
+  const store = memoryStore([[key, JSON.stringify({ nicole: "show" })]]);
+  assert.equal(migrateProfileSpoilerShieldPreference(store, "v_ali", "V’Ali"), false);
+  assert.deepEqual(JSON.parse(store.getItem(key) ?? "{}"), { nicole: "show" }, "nothing to adopt, nothing rewritten");
+  assert.equal(migrateProfileSpoilerShieldPreference(memoryStore(), "v_ali", "V’Ali"), false);
+});
+
+test("degenerate migrations do not touch the store", () => {
+  const key = SPOILER_SHIELD_STORAGE_KEY;
+  const store = memoryStore([[key, JSON.stringify({ demo: "show" })]]);
+  assert.equal(migrateProfileSpoilerShieldPreference(null, "v_ali", "V’Ali"), false);
+  assert.equal(migrateProfileSpoilerShieldPreference(undefined, "v_ali", "V’Ali"), false);
+  assert.equal(migrateProfileSpoilerShieldPreference(store, "", "V’Ali"), false);
+  assert.equal(migrateProfileSpoilerShieldPreference(store, "v_ali", ""), false);
+  assert.equal(
+    migrateProfileSpoilerShieldPreference(store, "demo", "demo"),
+    false,
+    "identical slug and display name need no migration"
+  );
+  assert.deepEqual(JSON.parse(store.getItem(key) ?? "{}"), { demo: "show" });
+});
+
+test("migration survives broken storage with the conservative default intact", () => {
+  const readonlyStore: SpoilerShieldStore = {
+    getItem: () => JSON.stringify({ "V’Ali": "show" }),
+    setItem: () => {
+      throw new Error("quota exceeded");
+    }
+  };
+  assert.equal(migrateProfileSpoilerShieldPreference(readonlyStore, "v_ali", "V’Ali"), false);
+  const throwingStore: SpoilerShieldStore = {
+    getItem: () => {
+      throw new Error("storage blocked");
+    },
+    setItem: () => undefined
+  };
+  assert.equal(migrateProfileSpoilerShieldPreference(throwingStore, "v_ali", "V’Ali"), false);
 });
 
 test("demo fixtures support the whole shield journey without real outcomes", () => {
