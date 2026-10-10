@@ -2,9 +2,58 @@
 
 Origin/main is the authoritative control plane. Branch/worktree existence is lease authority. Only the newest table supplies candidate work.
 
-## Owner acceptance — 2026-10-09 reconciliation and reload
+## Owner acceptance and lease reconciliation — 2026-10-10
 
-> **Authoritative selection table.** This owner-authorized acceptance supersedes every earlier execution/READY table. Claim only READY rows here with eligible full specs, satisfied dependencies and no local/remote lease. Historical tables are nonclaimable lineage; never fall back to historical READY labels.
+> **Authoritative status record.** This owner-authorized acceptance supersedes every earlier execution/READY table. There is **no claimable READY work** after this action: RH-0046 is delivered REVIEW and lease-held, awaiting owner acceptance. Historical tables are nonclaimable lineage; never fall back to historical READY labels.
+>
+> Owner decisions 2026-10-10 (in-session, America/New_York, ~02:20–02:45 EDT): **RH-0045 accepted — squash-merged to main** at `077e1b6` (squash of REVIEW head `b3ccab5` onto `4655455`, owner-specified integration method; accepted tree byte-identical to the tested head — `git diff b3ccab5^{tree} 077e1b6^{tree}` empty; because this was a squash, the branch's commit ancestry is intentionally not on main — the branch remains frozen evidence). **All 32 remaining CLAIMED branch leases reconciled per owner order** — dispositions in the ledger below (11 COMPLETE-by-incorporation, 21 CLOSED-superseded; verified by fresh merge-base evidence, see `reports/reconcile-2026-10-10.md`). **RH-0046 was delivered REVIEW** at `ae93304` (base `4655455`) by the October 9 dispatch and **awaits owner acceptance** — this control action does not accept or merge it.
+>
+> **0 claimable READY candidates.** The numeric reserve is not met by design: no new wave was ordered with this action. Refresh main after each handoff; the next worker prompt will accompany the next owner-ordered reload. Evidence: [reconcile-2026-10-10.md](reports/reconcile-2026-10-10.md).
+
+### Delivery and ownership ledger — 2026-10-10 acceptance and lease reconciliation
+
+| Job ID | Previous state | Reconciled state | Evidence |
+|---|---|---|---|
+| RH-0045 | REVIEW | COMPLETE | Owner accepted; squash-merged to main `077e1b6` (REVIEW head `b3ccab5`; verification per RH-0045 report: typecheck/lint clean, 220 hermetic / 75 integration / 9 regression / 21 real-browser checks / 4-visual-judge screens; audit 9 (8 high, 1 critical) → 5 high / 0 critical, residual `braces` chain dispositioned accepted risk; accepted tree byte-identical to the tested head) |
+| RH-0046 | READY (delivered REVIEW on branch) | **REVIEW — awaiting owner acceptance** | Delivered 2026-10-09 dispatch at `ae93304` (base `4655455`); evidence per `RH-0046.md` on the branch: typecheck/lint clean, 228 hermetic / 76 integration / build with `/api/profiles` / 16 real-browser checks / 5-visual-judge screens; lease held (remote branch + local worktree). Integration note for acceptance: the only file overlapping the accepted RH-0045 squash is `package.json` (hermetic-suite union line vs pins/`test:regression`) — mechanical union resolution. |
+| RH-0030 | CLAIMED | COMPLETE (incorporated) | Branch tip is an ancestor of `origin/main` (fresh merge-base verification 2026-10-10); content entered via the RH-0041 convergence merges (`c72c30c`, `4c0e364`, …) inside the RH-0044 carrier accepted at `59127ce`; delivery report on main (`.zcode-worker/reports/…RH-0030…`) |
+| RH-0031 | CLAIMED | COMPLETE (incorporated) | As RH-0030 (ancestor of main via the convergence chain; report on main) |
+| RH-0032 | CLAIMED | COMPLETE (incorporated) | As RH-0030 |
+| RH-0033 | CLAIMED | COMPLETE (incorporated) | As RH-0030 |
+| RH-0034 | CLAIMED | COMPLETE (incorporated) | As RH-0030 |
+| RH-0035 | CLAIMED | COMPLETE (incorporated) | As RH-0030 (its TV UI is the delivered product shell) |
+| RH-0036 | CLAIMED | COMPLETE (incorporated) | As RH-0030 |
+| RH-0037 | CLAIMED | COMPLETE (incorporated) | As RH-0030 |
+| RH-0038 | CLAIMED | COMPLETE (incorporated) | As RH-0030 |
+| RH-0039 | CLAIMED | COMPLETE (incorporated) | As RH-0030 |
+| RH-0040 | CLAIMED | COMPLETE (incorporated) | As RH-0030 |
+| RH-0002 | CLAIMED | CLOSED (superseded) | Branch NOT an ancestor of main (fresh merge-base verification 2026-10-10); scope re-delivered by later accepted generations (DB layer on main: `src/lib/db/*`, migration `0001_app_role_grants_baseline`, per RH-0030/RH-0044 acceptance); branch retained as frozen evidence |
+| RH-0003 | CLAIMED | CLOSED (superseded) | As RH-0002 (migration surface delivered inside RH-0044: migrations 0001–0010) |
+| RH-0008 | CLAIMED | CLOSED (superseded) | As RH-0002 — with one exception: its regression suite + security doc + pins were integrated by **RH-0044's successor carrier RH-0045** (source `4440f99`, accepted `077e1b6`); the remaining branch content (old-baseline control-plane edits) is stale |
+| RH-0009 | CLAIMED | CLOSED (superseded) | As RH-0002 (TV/focus shell delivered via rh-0019→RH-0035 lineage inside the carrier) |
+| RH-0010 | CLAIMED | CLOSED (superseded) | As RH-0002 (bounded search contract delivered in the B-generation read models) |
+| RH-0011 | CLAIMED | CLOSED (superseded) | As RH-0002 (responsive/poster presentation delivered via RH-0013/RH-0035 lineage) |
+| RH-0012 | CLAIMED | CLOSED (superseded) | As RH-0002 (degraded-mode/reconnection delivered in the accepted read-model family) |
+| RH-0013 | CLAIMED | CLOSED (superseded) | As RH-0002 (poster srcSet/performance delivered in the accepted UI generation) |
+| RH-0014 | CLAIMED | CLOSED (superseded) | As RH-0002 (a11y contracts delivered and extended by RH-0042/0043/0046 suites) |
+| RH-0015 | CLAIMED | CLOSED (superseded) | As RH-0002 (connectivity/smoke delivered via RH-0030 lineage on main) |
+| RH-0016 | CLAIMED | CLOSED (superseded) | As RH-0002 (catalog sync delivered via RH-0031/0032/0039 lineage on main) |
+| RH-0017 | CLAIMED | CLOSED (superseded) | As RH-0002 (household persistence delivered in the accepted generation; RH-0005 resolved CLOSED 2026-10-09 records the residual write-API disposition) |
+| RH-0018 | CLAIMED | CLOSED (superseded) | As RH-0017 |
+| RH-0019 | CLAIMED | CLOSED (superseded) | As RH-0009 |
+| RH-0020 | CLAIMED | CLOSED (superseded) | As RH-0002 (search/read-model enhancement delivered via RH-0034 lineage on main) |
+| RH-0021 | CLAIMED | CLOSED (superseded) | As RH-0002 (backup/restore/DR delivered via RH-0037/0040 lineage on main; RH-0007 resolved CLOSED 2026-10-09) |
+| RH-0022 | CLAIMED | CLOSED (superseded) | As RH-0017 (continue-watching reconciliation/watch-state delivered in the accepted generation) |
+| RH-0023 | CLAIMED | CLOSED (superseded) | As RH-0002 (identity quarantine/repair delivered via RH-0036/0039 lineage on main) |
+| RH-0024 | CLAIMED | CLOSED (superseded) | As RH-0015 |
+| RH-0026 | CLAIMED | CLOSED (superseded) | As RH-0016 |
+| RH-0027 | CLAIMED | CLOSED (superseded) | As RH-0017 |
+
+No branches or worktrees were deleted by this reconciliation; all 32 branch tips remain on the remote as frozen evidence. Remote pruning is now safe for the 21 CLOSED branches and the merged RH-0030–RH-0040 tips, and remains available to the owner on order.
+
+## Superseded execution wave — 2026-10-09 reconciliation and reload
+
+> **Superseded selection table; nonclaimable lineage.** Superseded by the 2026-10-10 owner acceptance above; this table no longer authorizes selection and historical READY labels are lineage only.
 >
 > Owner decision 2026-10-09 (in-session, America/New_York): **RH-0043 accepted and merged to main** at `f7526c4` (merge `--no-ff` of REVIEW head `1648eca` onto `3f78a8e`; product tree byte-identical to the tested head — `git diff 1648eca^{tree} f7526c4^{tree}` empty). **RH-0005 / RH-0006 / RH-0007 are RESOLVED per owner instruction** with evidence-based dispositions in the ledger below; no residual work auto-ordered. The owner ordered a queue reload for work: **RH-0045 and RH-0046 are READY** as the October 9 wave. All other CLAIMED leases remain intact and unchanged; their disposition is a future owner action.
 >
@@ -247,6 +296,7 @@ _None._
 | Job ID | Status | Integration |
 |---|---|---|
 | RH-0001 | COMPLETE | Imported Synology ReelHouse source baseline accepted and squash-merged through PR #1 at `605ee8f`; baseline inventory, deployment mapping, data authorities, and PostgreSQL 18 migration surface are now on `main` |
+| RH-0045 | COMPLETE | Owner-accepted 2026-10-10; Next.js security upgrade carrier squash-merged to `main` at `077e1b6` (next + eslint-config-next 16.4.0 exact pins; RH-0008 regression suite as `test:regression`; `docs/SECURITY_UPGRADE.md`; audit 9 → 5 high with the unpatchable dev-only `braces` chain dispositioned accepted risk; accepted tree byte-identical to tested head `b3ccab5`) |
 | RH-0043 | COMPLETE | Owner-accepted 2026-10-09; household profile switch and cached-state isolation merged to `main` at `f7526c4` (14 files, +655/−51: live `?profile=` URL identity, bounded switch cleanup, generation-bound requests, slug-keyed shield storage with display-name migration; report + 4 screens) |
 | RH-0044 | COMPLETE | Owner-accepted 2026-10-08; household-catalog and spoiler final review carrier merged to `main` at `59127ce` (136 files, +26,556/−136; includes RH-0041 + RH-0042 + per-profile watch-state plumbing and all delivery reports/screens) |
 | RH-0041 | COMPLETE | Incorporated inside the RH-0044 acceptance (frozen `5fe1981`, merged clean) |

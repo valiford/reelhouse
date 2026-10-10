@@ -1,6 +1,6 @@
 # RH-0045 — Next.js security upgrade integration carrier
 
-STATUS: REVIEW (worker-delivered 2026-10-09; report: `.zcode-worker/reports/RH-0045.md` — only the owner accepts and merges)
+STATUS: COMPLETE (owner-accepted 2026-10-10; squash-merged to main at `077e1b6` from REVIEW head `b3ccab5` — accepted tree byte-identical to the tested head; report: `.zcode-worker/reports/RH-0045.md`)
 AGENT: ZCODE
 AUTOMATION_ELIGIBLE: true
 BASE: origin/main (fetch at claim time; audited at the 2026-10-09 reload)
