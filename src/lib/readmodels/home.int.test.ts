@@ -38,11 +38,12 @@ import {
   HouseholdEmptyError,
   HouseholdProfileNotFoundError,
   homeFeed,
+  listProfiles,
   resolveProfile
 } from "./home-feed.ts";
 import { recommendationInputs } from "./recommendations.ts";
 import { getCatalogItem, searchCatalogItems } from "./browse.ts";
-import { resolvePage, resolveSearchFilters } from "./params.ts";
+import { MAX_PROFILE_ROSTER, resolvePage, resolveSearchFilters } from "./params.ts";
 
 const MIGRATIONS_DIR = fileURLToPath(new URL("../../../db/migrations", import.meta.url));
 const TEMP_DB = "reelhouse_rh0034b_tmp";
@@ -299,6 +300,36 @@ test("profile resolution: default profile, named profile, unknown profile", asyn
     assert.equal(named.is_default, false);
 
     await assert.rejects(resolveProfile(db.read, "ghost"), HouseholdProfileNotFoundError);
+  });
+});
+
+test("the household roster is active-only, deterministically ordered, and bounded", async (t) => {
+  await withSeededHousehold(t, async (db) => {
+    // Default first, then slug order — the order the switcher renders.
+    const roster = await listProfiles(db.read);
+    assert.deepEqual(roster.map((row) => row.slug), ["vali", "nicole"]);
+    assert.deepEqual(
+      roster.map((row) => [row.slug, row.display_name, row.is_default]),
+      [
+        ["vali", "Vali", true],
+        ["nicole", "Nicole", false]
+      ]
+    );
+
+    // Archived (tombstoned) profiles drop out of the roster but come back on
+    // re-assertion — exactly the import's archive semantics.
+    await db.pool.query("UPDATE household_profiles SET archived_at = now() WHERE slug = 'nicole'");
+    assert.deepEqual((await listProfiles(db.read)).map((row) => row.slug), ["vali"]);
+
+    // The row cap bounds the roster regardless of how many active profiles
+    // exist; the archived profile stays out even under the cap.
+    await db.pool.query(
+      "INSERT INTO household_profiles (slug, display_name) SELECT 'extra_' || g, 'Extra ' || g FROM generate_series(0, 59) AS g"
+    );
+    const capped = await listProfiles(db.read);
+    assert.equal(capped.length, MAX_PROFILE_ROSTER);
+    assert.ok(capped.every((row) => row.slug !== "nicole"), "archived profiles stay out even under the cap");
+    assert.equal(capped[0].slug, "vali", "the default still leads the capped roster");
   });
 });
 

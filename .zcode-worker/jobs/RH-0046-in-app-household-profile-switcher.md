@@ -1,6 +1,6 @@
 # RH-0046 — In-app household profile switcher
 
-STATUS: READY
+STATUS: REVIEW (worker-delivered 2026-10-09; report: `.zcode-worker/reports/RH-0046.md` — only the owner accepts and merges)
 AGENT: ZCODE
 AUTOMATION_ELIGIBLE: true
 BASE: origin/main (fetch at claim time; audited at the 2026-10-09 reload)

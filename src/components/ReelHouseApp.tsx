@@ -15,6 +15,13 @@ import {
   type SpoilerShieldStore
 } from "@/lib/spoiler";
 import { createGenerationGuard, normalizeProfileSlug, profileQueryParam } from "@/lib/session/profile-session";
+import {
+  DEMO_ROSTER_ENTRY,
+  activeRosterSlug,
+  parseProfileRoster,
+  profileSwitchTarget,
+  type ProfileRosterEntry
+} from "@/lib/session/profile-roster";
 import { buildFocusMap, firstFocusable, moveFocus, type Direction, type FocusSpot } from "@/lib/tv/navigation";
 import {
   cardFromCatalog,
@@ -105,6 +112,11 @@ function buildCatalogSearchUrl(filters: SearchFilters, profileSlug: string | nul
   if (offset > 0) params.set("offset", String(offset));
   return `/api/catalog/search?${params.toString()}`;
 }
+
+// Roster state behind the profile switcher: what the dialog shows while the
+// household census is in flight, ready, or refused. Failure never touches
+// the session underneath — the switcher is a surface over it, not a part of it.
+type Roster = { phase: "loading" | "ready" | "error"; entries: ProfileRosterEntry[] };
 
 // The catalog normalizes Jellyfin "Video" items to "movie", so the type axis
 // cannot express a "Home Videos" slice; home-video libraries surface through
@@ -328,6 +340,16 @@ export default function ReelHouseApp() {
   const [detail, setDetail] = useState<Detail | null>(null);
   const openerRef = useRef<string | null>(null);
 
+  // Profile switcher (RH-0046): the dialog's visibility and its household
+  // roster load. The roster request is token-bound like the detail request —
+  // a late reply must never fill a dialog that already closed — but it is
+  // NOT generation-bound: the roster is household-scoped, identical for
+  // every profile, so a switch never invalidates it, only a dialog close.
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [roster, setRoster] = useState<Roster>({ phase: "loading", entries: [] });
+  const rosterAbortRef = useRef<AbortController | null>(null);
+  const rosterRequestRef = useRef(0);
+
   // Session isolation (RH-0043): one generation for the whole mounted
   // session's async work, invalidated on every profile identity change and
   // on unmount; per-request abort controllers for the requests that outlive
@@ -361,6 +383,15 @@ export default function ReelHouseApp() {
     loadMoreAbortRef.current?.abort();
     loadMoreAbortRef.current = null;
     loadMoreInFlightRef.current = false;
+    // The switcher is session chrome: a switch made outside it (history
+    // navigation) closes it, and its in-flight roster work goes with the
+    // session it opened in. The switch made INSIDE it already closed the
+    // dialog; these are then no-ops.
+    rosterRequestRef.current += 1;
+    rosterAbortRef.current?.abort();
+    rosterAbortRef.current = null;
+    setProfileMenuOpen(false);
+    setRoster({ phase: "loading", entries: [] });
     setMode("home");
     setFilters({ q: "", types: [], library: null });
     setResults(null);
@@ -376,6 +407,7 @@ export default function ReelHouseApp() {
       profileGenRef.current.invalidate();
       detailAbortRef.current?.abort();
       loadMoreAbortRef.current?.abort();
+      rosterAbortRef.current?.abort();
     },
     []
   );
@@ -447,6 +479,19 @@ export default function ReelHouseApp() {
         ? { display_name: boot.feed.profile.display_name, initials: boot.feed.profile.initials }
         : null,
     [boot]
+  );
+
+  // The session's effective identity for the switcher (RH-0046): the feed's
+  // resolved slug once known — it covers the unscoped default view — else the
+  // asserted URL slug. Demo mode's identity is the delivered demo key. This
+  // is display/marking state; the contractual session identity remains the
+  // URL slug read live at the top of the component.
+  const sessionSlug = useMemo(
+    () =>
+      boot.phase === "demo"
+        ? "demo"
+        : activeRosterSlug(profileSlug, boot.phase === "ready" ? (boot.feed.profile?.slug ?? null) : null),
+    [boot, profileSlug]
   );
 
   // The spoiler preference is keyed by the contractual household identity:
@@ -695,6 +740,81 @@ export default function ReelHouseApp() {
     setFocusId("nav-search");
   }, []);
 
+  // Roster load for the switcher (RH-0046): one token-bound request at a
+  // time; an outlived reply (dialog closed, retried, session switched) never
+  // lands. Demo mode never fetches — the household census has no database
+  // behind it there, and the delivered demo fixture identity is the honest
+  // roster.
+  const loadRoster = useCallback(() => {
+    rosterRequestRef.current += 1;
+    const request = rosterRequestRef.current;
+    rosterAbortRef.current?.abort();
+    const controller = new AbortController();
+    rosterAbortRef.current = controller;
+    setRoster({ phase: "loading", entries: [] });
+    (async () => {
+      try {
+        const res = await fetch("/api/profiles", { signal: controller.signal });
+        const body = await res.json().catch(() => null);
+        if (rosterRequestRef.current !== request) return;
+        if (!res.ok) {
+          setRoster({ phase: "error", entries: [] });
+          return;
+        }
+        setRoster({ phase: "ready", entries: parseProfileRoster(body) });
+      } catch {
+        if (!controller.signal.aborted && rosterRequestRef.current === request) {
+          setRoster({ phase: "error", entries: [] });
+        }
+      }
+    })();
+  }, []);
+
+  const openProfileMenu = useCallback(() => {
+    setProfileMenuOpen(true);
+    setFocusId("profile-menu-close");
+    if (boot.phase === "demo") {
+      setRoster({ phase: "ready", entries: [DEMO_ROSTER_ENTRY] });
+      return;
+    }
+    loadRoster();
+  }, [boot.phase, loadRoster]);
+
+  const closeProfileMenu = useCallback(() => {
+    // Invalidate first: an in-flight roster reply must never fill a dialog
+    // that already closed (same discipline as closeDetail).
+    rosterRequestRef.current += 1;
+    rosterAbortRef.current?.abort();
+    rosterAbortRef.current = null;
+    setProfileMenuOpen(false);
+    // Cancelling restores focus to the invoker — the remote user's place.
+    setFocusId("profile-pill");
+  }, []);
+
+  // Activating a roster entry navigates to the target slug's URL through the
+  // exact mechanism the RH-0043 contract verifies (native history.pushState,
+  // which Next's router surfaces into useSearchParams) — the delivered
+  // identity contract then performs the session reboot: generation
+  // invalidation, request aborts, and cached-view drops all happen in its
+  // effect, never here. Re-selecting the current session (or an entry with
+  // no navigable identity) only closes the dialog: no navigation, so no
+  // reboot and no cached state dropped.
+  const activateRosterEntry = useCallback(
+    (entry: ProfileRosterEntry) => {
+      const target = profileSwitchTarget(sessionSlug, entry.slug);
+      rosterRequestRef.current += 1;
+      rosterAbortRef.current?.abort();
+      rosterAbortRef.current = null;
+      setProfileMenuOpen(false);
+      if (target === null) {
+        setFocusId("profile-pill");
+        return;
+      }
+      history.pushState(null, "", target);
+    },
+    [sessionSlug]
+  );
+
   // Focus registration: one flat spot set per layout, rebuilt when the
   // layout changes. Bands mirror the visual rows exactly (top bar, hero,
   // rail heading + cards [+ reveal chips], search grid rows [+ chips],
@@ -710,9 +830,21 @@ export default function ReelHouseApp() {
       if (detail.phase === "error") modalSpots.push({ id: "modal-retry", band: 0, slot: 1 });
       return modalSpots;
     }
+    // The profile switcher (RH-0046) is the whole world while open, like the
+    // detail modal: close/retry in the head band, one entry per band below so
+    // remote arrows walk the roster top to bottom.
+    if (profileMenuOpen) {
+      const menuSpots: FocusSpot[] = [{ id: "profile-menu-close", band: 0, slot: 0 }];
+      if (roster.phase === "error") menuSpots.push({ id: "profile-retry", band: 0, slot: 1 });
+      roster.entries.forEach((_entry, index) => {
+        menuSpots.push({ id: `profile-entry:${index}`, band: 1 + index, slot: 0 });
+      });
+      return menuSpots;
+    }
     const navSpots: FocusSpot[] = NAV_PRESETS.map((preset, index) => ({ id: `nav-${preset.id}`, band: 0, slot: index }));
     navSpots.push({ id: "nav-search", band: 0, slot: NAV_PRESETS.length });
     navSpots.push({ id: "shield-toggle", band: 0, slot: NAV_PRESETS.length + 1 });
+    navSpots.push({ id: "profile-pill", band: 0, slot: NAV_PRESETS.length + 2 });
     if (mode === "search") {
       const searchSpots: FocusSpot[] = [...navSpots, { id: "search-input", band: 1, slot: 0 }];
       if (filters.library || filters.types.length) searchSpots.push({ id: "filter-clear", band: 1, slot: 1 });
@@ -765,7 +897,7 @@ export default function ReelHouseApp() {
     }
     if (boot.phase === "error") homeSpots.push({ id: "boot-retry", band: 1, slot: 0 });
     return homeSpots;
-  }, [detail, mode, filters.library, filters.types, results, searchState, columns, boot, hero, rails, shieldFor]);
+  }, [detail, profileMenuOpen, roster, mode, filters.library, filters.types, results, searchState, columns, boot, hero, rails, shieldFor]);
 
   const focusMap = useMemo(() => buildFocusMap(spots), [spots]);
 
@@ -819,6 +951,32 @@ export default function ReelHouseApp() {
         return;
       }
 
+      // The profile switcher (RH-0046) traps the same way: Escape/Backspace
+      // cancel and restore focus to the invoker, arrows rove the roster,
+      // Enter activates the focused entry's real button natively.
+      if (profileMenuOpen) {
+        if (event.key === "Escape" || event.key === "Backspace") {
+          event.preventDefault();
+          closeProfileMenu();
+          return;
+        }
+        if (event.key === "Tab") {
+          event.preventDefault();
+          const current = focusId && focusMap.byId.has(focusId) ? focusId : firstFocusable(focusMap);
+          const next = event.shiftKey
+            ? moveFocus(focusMap, current, "left") ?? focusMap.order[focusMap.order.length - 1]
+            : moveFocus(focusMap, current, "right") ?? focusMap.order[0];
+          if (next) setFocus(next);
+          return;
+        }
+        if (arrow && !inInput) {
+          event.preventDefault();
+          const next = moveFocus(focusMap, focusId, arrow);
+          if (next) setFocus(next);
+        }
+        return;
+      }
+
       // While the search input owns the keyboard, text editing wins: no
       // arrow roving except ArrowDown into the results, and Escape/Backspace
       // leave search entirely.
@@ -851,9 +1009,10 @@ export default function ReelHouseApp() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [focusMap, focusId, detail, mode, closeDetail, closeSearch, setFocus]);
+  }, [focusMap, focusId, detail, profileMenuOpen, mode, closeDetail, closeProfileMenu, closeSearch, setFocus]);
 
   const statusMessage = (() => {
+    if (profileMenuOpen && roster.phase === "error") return "Household roster unavailable — the current session is unaffected";
     if (boot.phase === "boot" || boot.phase === "loading") return "Loading your ReelHouse feed";
     if (boot.phase === "error") {
       return boot.kind === "profile"
@@ -922,16 +1081,30 @@ export default function ReelHouseApp() {
               <ShieldIcon />
               <span className="shield-label">Shield {spoilerShield === "shield" ? "on" : "off"}</span>
             </button>
-            <div className="profile-pill" aria-label={activeProfile ? `Profile ${activeProfile.display_name}` : "No profile loaded"}>
+            <button
+              className="profile-pill"
+              data-focus-id="profile-pill"
+              tabIndex={focusId === "profile-pill" ? 0 : -1}
+              aria-haspopup="dialog"
+              aria-expanded={profileMenuOpen}
+              aria-controls="profile-menu"
+              aria-label={
+                activeProfile
+                  ? `Switch profile — current profile ${activeProfile.display_name}`
+                  : "Switch profile"
+              }
+              onFocus={() => setFocus("profile-pill")}
+              onClick={openProfileMenu}
+            >
               {activeProfile ? (
                 <>
-                  <span>{activeProfile.initials || activeProfile.display_name.slice(0, 2).toUpperCase()}</span>
+                  <span aria-hidden>{activeProfile.initials || activeProfile.display_name.slice(0, 2).toUpperCase()}</span>
                   {activeProfile.display_name}
                 </>
               ) : (
-                <span className="profile-pill-empty">—</span>
+                <span className="profile-pill-empty" aria-hidden>—</span>
               )}
-            </div>
+            </button>
           </div>
         </header>
 
@@ -1329,6 +1502,93 @@ export default function ReelHouseApp() {
                     <button className="secondary-button" onClick={closeDetail}>Close</button>
                   </div>
                 </div>
+              )}
+            </section>
+          </div>
+        )}
+
+        {profileMenuOpen && (
+          <div
+            id="profile-menu"
+            className="profile-menu-shell"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Switch household profile"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) closeProfileMenu();
+            }}
+          >
+            <section className="profile-menu">
+              <div className="profile-menu-head">
+                <h2>Switch profile</h2>
+                <button
+                  className="close"
+                  data-focus-id="profile-menu-close"
+                  tabIndex={focusId === "profile-menu-close" ? 0 : -1}
+                  aria-label="Close profile switcher"
+                  onFocus={() => setFocus("profile-menu-close")}
+                  onClick={closeProfileMenu}
+                >
+                  ×
+                </button>
+              </div>
+              {roster.phase === "loading" && (
+                <div className="profile-menu-body" aria-hidden>
+                  <div className="skeleton-bar" style={{ width: 170 }} />
+                  <div className="skeleton-bar" style={{ width: 205 }} />
+                  <div className="skeleton-bar" style={{ width: 185 }} />
+                </div>
+              )}
+              {roster.phase === "error" && (
+                <div className="profile-menu-body">
+                  <p className="empty-note">
+                    ReelHouse could not load the household roster. Your current session is unaffected.
+                  </p>
+                  <button
+                    className="secondary-button"
+                    data-focus-id="profile-retry"
+                    tabIndex={focusId === "profile-retry" ? 0 : -1}
+                    onFocus={() => setFocus("profile-retry")}
+                    onClick={loadRoster}
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+              {roster.phase === "ready" && roster.entries.length === 0 && (
+                <div className="profile-menu-body">
+                  <p className="empty-note">
+                    No active household profiles yet — import a household snapshot to add them.
+                  </p>
+                </div>
+              )}
+              {roster.phase === "ready" && roster.entries.length > 0 && (
+                <ul className="profile-menu-list">
+                  {roster.entries.map((entry, index) => {
+                    const active = entry.slug === sessionSlug;
+                    return (
+                      <li key={entry.slug}>
+                        <button
+                          className={active ? "profile-menu-entry active" : "profile-menu-entry"}
+                          data-focus-id={`profile-entry:${index}`}
+                          tabIndex={focusId === `profile-entry:${index}` ? 0 : -1}
+                          aria-current={active ? "true" : undefined}
+                          aria-label={
+                            active
+                              ? `${entry.displayName} — current profile`
+                              : `Switch to ${entry.displayName}`
+                          }
+                          onFocus={() => setFocus(`profile-entry:${index}`)}
+                          onClick={() => activateRosterEntry(entry)}
+                        >
+                          <span aria-hidden>{entry.initials || entry.displayName.slice(0, 2).toUpperCase()}</span>
+                          {entry.displayName}
+                          {active && <span className="profile-menu-active-tag">Active</span>}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
               )}
             </section>
           </div>

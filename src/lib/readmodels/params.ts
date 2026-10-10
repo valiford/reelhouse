@@ -32,6 +32,11 @@ export const RAIL_MAX_LIMIT = 50;
 export const MAX_HOME_ROWS_PER_PROFILE = 12;
 export const MAX_BUCKETS_GENRES = 10;
 
+// The household roster a client may list (the profile switcher's source):
+// a household is human-sized, and the bound keeps the read honest even if
+// an import ever misbehaves — the roster renders at most this many entries.
+export const MAX_PROFILE_ROSTER = 50;
+
 export const ITEM_TYPES: readonly CatalogItemType[] = ["movie", "series", "season", "episode"];
 
 export const CATALOG_SORTS = ["title", "recent", "rating", "year"] as const;

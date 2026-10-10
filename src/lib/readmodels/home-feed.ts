@@ -27,6 +27,7 @@ import type { QueryResultRow } from "pg";
 import type { ReadExecutor } from "./executor.ts";
 import {
   MAX_HOME_ROWS_PER_PROFILE,
+  MAX_PROFILE_ROSTER,
   resolveIdentifier,
   resolveRailLimit,
   ReadModelParamError
@@ -55,11 +56,16 @@ export interface HouseholdProfileSummary extends QueryResultRow {
   is_default: boolean;
 }
 
+// The bounded household roster: every ACTIVE profile in deterministic order
+// (default first, then by slug). Serves the in-app profile switcher — a
+// read-only census, never a write surface, and capped so the response stays
+// bounded by contract, not by household size.
 export async function listProfiles(executor: ReadExecutor): Promise<HouseholdProfileSummary[]> {
   const result = await executor.query<HouseholdProfileSummary>(
     `SELECT id, slug, display_name, initials, is_default FROM household_profiles
      WHERE archived_at IS NULL
-     ORDER BY is_default DESC, slug ASC`
+     ORDER BY is_default DESC, slug ASC
+     LIMIT ${MAX_PROFILE_ROSTER}`
   );
   return result.rows;
 }
