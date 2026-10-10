@@ -11,7 +11,7 @@ RH-0034 read models into display-ready data. The React layer
 
 | Mode | Home feed | Search | Item detail | Banners |
 |---|---|---|---|---|
-| **Database configured** | `/api/home` (profile-scoped rails) | `/api/catalog/search` (bounded, paginated) | `/api/catalog/items/:id` (facets) | `/api/catalog/status` + `/api/health` |
+| **Database configured** | `/api/home` (profile-scoped rails), `/api/profiles` (household roster behind the switcher) | `/api/catalog/search` (bounded, paginated) | `/api/catalog/items/:id` (facets) | `/api/catalog/status` + `/api/health` |
 | **Demo mode** (database unconfigured per `/api/health`) | bundled demo library | `/api/search` (demo route) + client-side type filter | card data, rendered locally | none |
 
 The UI never receives PostgreSQL credentials and never writes household
@@ -65,9 +65,9 @@ view with `block/inline: nearest`.
 
 The household profile is a **URL identity** (`?profile=<slug>`) that the UI
 tracks live — Next's router syncs `useSearchParams` with history navigation
-and native `history.pushState`/`replaceState`, so an in-session switch (and
-any future profile menu) is honored instead of silently serving the previous
-profile under the new URL. The slug is the contractual identity
+and native `history.pushState`/`replaceState`, so an in-session switch —
+history navigation or the in-app profile switcher (RH-0046, below) — is
+honored instead of silently serving the previous profile under the new URL. The slug is the contractual identity
 (`docs/HOUSEHOLD.md`); display names are copy, never cache keys.
 
 - **Identity-bound requests:** every profile-scoped call (home feed, catalog
@@ -94,6 +94,46 @@ profile under the new URL. The slug is the contractual identity
   through untouched so the server's 404/400 stays the fail-closed authority
   — the client never falls back to another profile.
 
+## Profile switcher (RH-0046)
+
+The profile pill in the top bar is the switcher invoker: a real button
+reachable by remote/keyboard focus and pointer (`aria-haspopup="dialog"`).
+Activating it opens a `role="dialog"` roster of the household's ACTIVE
+profiles (display name, avatar initials, the current session's entry marked
+Active with `aria-current`).
+
+- **Roster source:** `GET /api/profiles` — a dedicated, read-only census of
+  active `household_profiles` rows (slug, display name, initials, default
+  flag), bounded (`MAX_PROFILE_ROSTER`) and deterministically ordered
+  (default first, then by slug), served through the delivered read-model
+  discipline (shared pool executor, redacted 503 envelopes). Deliberately
+  separate from `/api/home`: the switcher must open even when the current
+  session's identity is unresolved (unknown/ghost slug), and the roster is
+  household-scoped, not profile-scoped.
+- **Switch mechanics:** activating a different entry navigates to its
+  `/?profile=<slug>` URL via native `history.pushState` — the exact
+  mechanism the RH-0043 contract verifies — and the delivered identity
+  contract performs the session re-boot (generation invalidation, request
+  aborts, cached-view drops). The switcher never hand-clears caches,
+  generations, or reveal state.
+- **No-op re-selection:** cancelling (Escape, Backspace, backdrop click) or
+  activating the CURRENT session's entry only closes the dialog and
+  restores focus to the invoker — no navigation, so no reboot and no cached
+  state dropped.
+- **Failure and edge behavior:** a roster fetch failure renders an honest
+  retry state while the session underneath stays fully usable; an empty
+  household renders an honest empty state (never fabricated profiles);
+  entries without a server identity are never rendered switchable; opening
+  the switcher on an unknown/ghost slug works and marks nothing active.
+  Demo mode (database unconfigured) lists the delivered demo fixture
+  identity, and activating it is a re-selection, never a navigation.
+- **Focus:** the dialog is the whole world while open (the same trap
+  discipline as the detail modal): the close control holds the initial
+  focus, roster entries are one focus-engine band each so arrows walk the
+  list, Enter activates the focused entry natively, Escape cancels back to
+  the pill. Nothing in the dialog animates, so the reduced-motion contract
+  holds by construction; at narrow widths the dialog caps to the viewport.
+
 ## Accessibility
 
 - Every focusable element shows the gold focus ring whenever focused, at
@@ -109,9 +149,11 @@ profile under the new URL. The slug is the contractual identity
 
 ## Notes
 
-- The old hardcoded profile menu and the dead "+ Watchlist" / "Home Videos"
-  nav controls were removed. Profile resolution is a URL concern
-  (`/api/home?profile=<slug>`); the catalog normalizes Jellyfin `Video` to
+- The imported baseline's hardcoded profile menu was removed (RH-0035); the
+  deliberate replacement is the RH-0046 switcher above, which drives the
+  same URL identity — profile resolution remains a URL concern
+  (`/?profile=<slug>`). The dead "+ Watchlist" / "Home Videos" nav controls
+  are gone. The catalog normalizes Jellyfin `Video` to
   `movie`, so a type-axis "Home Videos" slice is not expressible —
   home-video content is reached through its library rails and the
   `libraries=` search filter (a rail's "See all" opens exactly that).

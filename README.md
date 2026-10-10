@@ -163,9 +163,11 @@ verification: [docs/HOUSEHOLD.md](docs/HOUSEHOLD.md).
 Once catalog and household state are loaded, clients are served from
 bounded, indexed read models: `/api/catalog/search` (filter/paginate the
 active catalog), `/api/catalog/items/{id}` (detail with facets),
-`/api/catalog/status` (catalog freshness and degraded-state surface), and
+`/api/catalog/status` (catalog freshness and degraded-state surface),
 `/api/home` (a profile's home rows resolved into item rails — continue
-watching, recently added, favorites, libraries, collections, watchlists).
+watching, recently added, favorites, libraries, collections, watchlists),
+and `/api/profiles` (the household roster behind the in-app profile
+switcher).
 Every result set is capped, every order is deterministic, profile isolation
 is structural, and catalog churn (items removed from Jellyfin) drops out of
 rails on the next read without touching household state. Endpoints, bounds,
@@ -173,7 +175,8 @@ and semantics: [docs/READMODELS.md](docs/READMODELS.md).
 
 The TV/living-room UI consumes exactly these read models: the home feed
 renders `/api/home` rails, search drives `/api/catalog/search`, item detail
-opens `/api/catalog/items/{id}`, and `/api/catalog/status` + `/api/health`
+opens `/api/catalog/items/{id}`, the profile switcher lists `/api/profiles`,
+and `/api/catalog/status` + `/api/health`
 drive the degraded-state banners (with the bundled demo library taking over
 only when the database is unconfigured). Remote/keyboard interaction —
 deterministic arrow-key focus order, Enter/Back behavior, visible focus,

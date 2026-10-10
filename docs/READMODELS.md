@@ -20,7 +20,7 @@ deterministic, and every identity is validated before SQL ever sees it.
 | `src/lib/readmodels/freshness.ts` | Catalog/household freshness and degraded-state surface (`never_synced` / `fresh` / `stale`). |
 | `src/lib/readmodels/recommendations.ts` | Deterministic recommendation-input buckets (top genres, unwatched discovery, next up per series, quality-led recent). |
 | `src/lib/readmodels/api.ts` | Shared route error mapping: 400 invalid / 404 unknown / 503 database, redacted. |
-| `src/app/api/catalog/*`, `src/app/api/home` | The HTTP surface (below). |
+| `src/app/api/catalog/*`, `src/app/api/home`, `src/app/api/profiles` | The HTTP surface (below). |
 
 ## HTTP surface
 
@@ -33,6 +33,7 @@ never echo database credentials.
 | `GET /api/catalog/items/{jellyfinId}` | Item detail: card fields + overview/file state/etag + bounded facets (genres ≤30, studios ≤30, people ≤30, provider ids ≤20). 404 when unknown or tombstoned. |
 | `GET /api/catalog/status` | Catalog freshness: state, watermark, item counts by type, per-library active counts, last 5 sync runs, open quarantines, household freshness. Compose with `/api/health`'s Jellyfin probe for degraded banners. |
 | `GET /api/home` | The caller's home feed. `profile=<slug>` picks a profile; without it the active default is used. `limit` caps each rail (1–50, default 20). Returns the profile plus its home rows resolved into rails. An empty (pre-import) household renders `{profile:null, rows:[], emptyHousehold:true}` with 200. |
+| `GET /api/profiles` | The household roster behind the in-app profile switcher (RH-0046): every ACTIVE profile as `{slug, display_name, initials, is_default}`, ordered default-first then by slug, capped at `MAX_PROFILE_ROSTER` (50). Household-scoped, read-only, no parameters, no session identity — an empty (pre-import) household renders `{profiles:[]}` with 200. Never exposes emails, account links or credentials. |
 
 Error contract: malformed parameters → `400 {error:"invalid_request"}`;
 unknown profile/item → `404 {error:"not_found"}`; database

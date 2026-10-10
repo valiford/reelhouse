@@ -134,6 +134,9 @@ Household state is read back through the bounded PostgreSQL read models:
 favorites, library/collection/watchlist rails), scoped strictly to the
 selected profile (`?profile=slug`, default profile when absent). Entries
 whose catalog link is not resolved yet are skipped in the payload — the
-household rows themselves are never touched by reads. See
+household rows themselves are never touched by reads. `GET /api/profiles`
+(RH-0046) lists the ACTIVE profiles for the in-app switcher — a bounded,
+read-only census of slug, display name, initials and the default flag,
+default-first, that never exposes account links or credentials. See
 [CATALOG.md](CATALOG.md) "Read models" and [DR.md](DR.md) for the
 durable-vs-rebuildable split behind backup policy.
