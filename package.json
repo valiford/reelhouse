@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
 "test": "node --test --experimental-strip-types src/lib/db/config.test.ts src/lib/db/migrator.test.ts src/lib/jellyfin-health.test.ts src/lib/catalog/normalize.test.ts src/lib/catalog/source.test.ts src/lib/catalog/incremental.test.ts src/lib/catalog/workbench.test.ts src/lib/household/manifest.test.ts src/lib/dr/artifact.test.ts src/lib/dr/status.test.ts src/lib/readmodels/params.test.ts src/lib/readmodels/query.test.ts src/lib/readmodels/readmodels.test.ts src/lib/session/profile-session.test.ts src/lib/tv/navigation.test.ts src/lib/tv/viewmodel.test.ts src/lib/spoiler.test.ts",
     "test:int": "node --test src/lib/db/integration.int.test.ts src/lib/catalog/sync.int.test.ts src/lib/catalog/incremental.int.test.ts src/lib/catalog/workbench.int.test.ts src/lib/household/load.int.test.ts src/lib/dr/dr.int.test.ts src/lib/readmodels/readmodels.int.test.ts src/lib/readmodels/search.int.test.ts src/lib/readmodels/home.int.test.ts",
+    "test:regression": "node --test tests/regression.test.mjs",
     "db:migrate": "node scripts/db-migrate.ts",
     "catalog:sync": "node scripts/catalog-sync.ts",
     "household:import": "node scripts/household-import.ts",
@@ -18,7 +19,7 @@
     "dr:verify": "node scripts/dr-verify.ts"
   },
   "dependencies": {
-    "next": "16.0.1",
+    "next": "16.4.0",
     "pg": "^8.23.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
@@ -30,7 +31,7 @@
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
     "eslint": "9.39.1",
-    "eslint-config-next": "16.0.1",
+    "eslint-config-next": "16.4.0",
     "typescript": "5.9.3"
   }
 }
