@@ -2,9 +2,30 @@
 
 Origin/main is the authoritative control plane. Branch/worktree existence is lease authority. Only the newest table supplies candidate work.
 
-## Owner acceptance and lease reconciliation — 2026-10-10
+## Owner acceptance and October 10-B reload — RH-0046 complete, cleanup executed, new wave ordered
 
-> **Authoritative status record.** This owner-authorized acceptance supersedes every earlier execution/READY table. There is **no claimable READY work** after this action: RH-0046 is delivered REVIEW and lease-held, awaiting owner acceptance. Historical tables are nonclaimable lineage; never fall back to historical READY labels.
+> **Authoritative selection table.** This owner-authorized reload supersedes every earlier execution/READY table. Claim only READY rows here with eligible full specs, satisfied dependencies and no local/remote lease. Historical tables are nonclaimable lineage; never fall back to historical READY labels.
+>
+> Owner decisions 2026-10-10, wave B (in-session, America/New_York, ~02:45–03:15 EDT): **RH-0046 accepted — squash-merged to main** at `fc3818f` (squash of REVIEW head `ae93304` onto `b37527e`; the only overlapping file with the accepted RH-0045 squash, `package.json`, auto-merged and the union verified in both directions — staged delta vs HEAD = exactly RH-0046's 20 files, delta vs the RH-0045 tree = exactly the union; post-squash verification on merged main: typecheck clean, hermetic **228/228**, production build green with **10 routes** incl. `/api/profiles`). **Local cleanup executed** per owner order: the 32 reconciled remote branch tips pruned and remote-verified (8 intended refs remain), behind an archive bundle (`reelhouse-branch-archive-2026-10-10.bundle`, bundle-verified); all job worktrees and local branches ordered retired (rh-0025's moot WIP included) — the removal sweep was still running at commit time (OneDrive I/O-bound) and completes without further authorization; stray disposable container removed; retained on the remote: `main`, `rh-0001` (PR evidence), `rh-0041`–`rh-0044` (carrier lineage), `rh-0045`/`rh-0046` (squash-evidence heads — squash means their commit ancestry is intentionally not on main). **Latest image built:** `reelhouse:latest` from merged main (evidence below); production activation on the Synology remains an operator action (no production credentials exist in the worker environment — fail-closed). **October 10-B wave ordered:** RH-0047 and RH-0048 below.
+>
+> **1 claimable READY candidate** (RH-0047) subject to claim-time checks (11:00–21:00 America/New_York); RH-0048 is READY but dependency-gated on RH-0047's acceptance. Refresh main after each handoff and seek controller reconciliation after three additional REVIEW deliveries.
+>
+> Full worker prompt: [worker-2026-10-10-b.md](prompts/worker-2026-10-10-b.md) · Evidence: this commit's report and `reports/acceptance-2026-10-09.md` / `reports/reconcile-2026-10-10.md` for lineage.
+
+| Priority | Job ID | Status | Agent | Description |
+|---:|---|---|---|---|
+| 1 | RH-0047 | READY | ZCODE | [Household write API: profiles, preferences, and the idempotency kernel](jobs/RH-0047-household-write-api-profiles-preferences-idempotency-kernel.md) — the residual explicitly reserved by the RH-0005/0006 resolutions |
+| 2 | RH-0048 | READY (gated) | ZCODE | [Favorites, watchlists, collections, and home rows: write API and TV UI](jobs/RH-0048-favorites-watchlists-collections-home-rows-write-api-and-tv-ui.md) — claim only after RH-0047 is accepted onto origin/main |
+
+### Delivery and ownership ledger — 2026-10-10 wave B
+
+| Job ID | Previous state | Reconciled state | Evidence |
+|---|---|---|---|
+| RH-0046 | REVIEW | COMPLETE | Owner accepted; squash-merged to main `fc3818f` (REVIEW head `ae93304`; verification per RH-0046 report: 228 hermetic / 76 integration / build 10 routes / 16 real-browser checks / 5-visual-judge screens; union with the RH-0045 squash verified in both directions and re-proven on merged main post-squash) |
+
+## Superseded status record — 2026-10-10 acceptance and lease reconciliation
+
+> **Superseded status record; nonclaimable lineage.** Superseded by the 2026-10-10 wave B reload above; it authorizes no selection and historical READY labels are lineage only.
 >
 > Owner decisions 2026-10-10 (in-session, America/New_York, ~02:20–02:45 EDT): **RH-0045 accepted — squash-merged to main** at `077e1b6` (squash of REVIEW head `b3ccab5` onto `4655455`, owner-specified integration method; accepted tree byte-identical to the tested head — `git diff b3ccab5^{tree} 077e1b6^{tree}` empty; because this was a squash, the branch's commit ancestry is intentionally not on main — the branch remains frozen evidence). **All 32 remaining CLAIMED branch leases reconciled per owner order** — dispositions in the ledger below (11 COMPLETE-by-incorporation, 21 CLOSED-superseded; verified by fresh merge-base evidence, see `reports/reconcile-2026-10-10.md`). **RH-0046 was delivered REVIEW** at `ae93304` (base `4655455`) by the October 9 dispatch and **awaits owner acceptance** — this control action does not accept or merge it.
 >
@@ -296,6 +317,7 @@ _None._
 | Job ID | Status | Integration |
 |---|---|---|
 | RH-0001 | COMPLETE | Imported Synology ReelHouse source baseline accepted and squash-merged through PR #1 at `605ee8f`; baseline inventory, deployment mapping, data authorities, and PostgreSQL 18 migration surface are now on `main` |
+| RH-0046 | COMPLETE | Owner-accepted 2026-10-10; in-app household profile switcher squash-merged to `main` at `fc3818f` (GET `/api/profiles` bounded roster, invoker-dialog switcher over the focus engine, pushState switching through the RH-0043 contract; 20 files, +698/−22; report + 5 screens) |
 | RH-0045 | COMPLETE | Owner-accepted 2026-10-10; Next.js security upgrade carrier squash-merged to `main` at `077e1b6` (next + eslint-config-next 16.4.0 exact pins; RH-0008 regression suite as `test:regression`; `docs/SECURITY_UPGRADE.md`; audit 9 → 5 high with the unpatchable dev-only `braces` chain dispositioned accepted risk; accepted tree byte-identical to tested head `b3ccab5`) |
 | RH-0043 | COMPLETE | Owner-accepted 2026-10-09; household profile switch and cached-state isolation merged to `main` at `f7526c4` (14 files, +655/−51: live `?profile=` URL identity, bounded switch cleanup, generation-bound requests, slug-keyed shield storage with display-name migration; report + 4 screens) |
 | RH-0044 | COMPLETE | Owner-accepted 2026-10-08; household-catalog and spoiler final review carrier merged to `main` at `59127ce` (136 files, +26,556/−136; includes RH-0041 + RH-0042 + per-profile watch-state plumbing and all delivery reports/screens) |
